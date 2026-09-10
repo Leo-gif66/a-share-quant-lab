@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -25,6 +26,16 @@ def _akshare_history() -> pd.DataFrame:
 class FakeAKShare:
     def stock_zh_a_hist(self, **kwargs):
         self.kwargs = kwargs
+        return _akshare_history()
+
+
+class ProxyAwareFakeAKShare:
+    def stock_zh_a_hist(self, **kwargs):
+        self.proxy_values = {
+            "HTTP_PROXY": os.environ.get("HTTP_PROXY"),
+            "HTTPS_PROXY": os.environ.get("HTTPS_PROXY"),
+            "NO_PROXY": os.environ.get("NO_PROXY"),
+        }
         return _akshare_history()
 
 
@@ -66,6 +77,28 @@ def test_provider_returns_standard_fields():
     assert history["date"].is_monotonic_increasing
     assert provider._ak.kwargs["symbol"] == "000001"
     assert provider._ak.kwargs["adjust"] == "qfq"
+
+
+def test_provider_can_be_created_with_proxy_disabled_by_default():
+    provider = AKShareProvider(ak_client=FakeAKShare())
+
+    assert provider.disable_proxy is True
+
+
+def test_provider_disables_proxy_for_akshare_requests(monkeypatch):
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:8080")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:8080")
+    client = ProxyAwareFakeAKShare()
+    provider = AKShareProvider(ak_client=client)
+
+    provider.get_daily_history("000001", "20240101", "20240131")
+
+    assert client.proxy_values == {
+        "HTTP_PROXY": None,
+        "HTTPS_PROXY": None,
+        "NO_PROXY": "*",
+    }
+    assert os.environ["HTTP_PROXY"] == "http://proxy.example:8080"
 
 
 def test_downloader_saves_parquet(tmp_path: Path):
