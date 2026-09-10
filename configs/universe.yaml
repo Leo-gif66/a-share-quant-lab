@@ -1,45 +1,55 @@
 name: leo_watchlist
 
 stocks:
-
-  automation:
-    - code: "300124"
-      name: "汇川技术"
-
-  finance:
-    - code: "600030"
-      name: "中信证券"
-    - code: "300059"
-      name: "东方财富"
-
-  communication:
-    - code: "000063"
-      name: "中兴通讯"
-
-  defense:
-    - code: "002179"
-      name: "中航光电"
-    - code: "300474"
-      name: "景嘉微"
-
-  energy_equipment:
-    - code: "688187"
-      name: "时代电气"
-    - code: "601727"
-      name: "上海电气"
-
-  power_electronics:
-    - code: "300376"
-      name: "易事特"
-
-  chemical:
-    - code: "600309"
-      name: "万华化学"
-
-  benchmark:
-    - code: "600519"
-      name: "贵州茅台"
-    - code: "300750"
-      name: "宁德时代"
-    - code: "002594"
-      name: "比亚迪"
+  - code: "300124"
+    name: "汇川技术"
+    market: "SZ"
+    sector: "automation"
+  - code: "600030"
+    name: "中信证券"
+    market: "SH"
+    sector: "finance"
+  - code: "300059"
+    name: "东方财富"
+    market: "SZ"
+    sector: "finance"
+  - code: "000063"
+    name: "中兴通讯"
+    market: "SZ"
+    sector: "communication"
+  - code: "002179"
+    name: "中航光电"
+    market: "SZ"
+    sector: "defense"
+  - code: "300474"
+    name: "景嘉微"
+    market: "SZ"
+    sector: "defense"
+  - code: "688187"
+    name: "时代电气"
+    market: "SH"
+    sector: "energy_equipment"
+  - code: "601727"
+    name: "上海电气"
+    market: "SH"
+    sector: "energy_equipment"
+  - code: "300376"
+    name: "易事特"
+    market: "SZ"
+    sector: "power_electronics"
+  - code: "600309"
+    name: "万华化学"
+    market: "SH"
+    sector: "chemical"
+  - code: "600519"
+    name: "贵州茅台"
+    market: "SH"
+    sector: "benchmark"
+  - code: "300750"
+    name: "宁德时代"
+    market: "SZ"
+    sector: "benchmark"
+  - code: "002594"
+    name: "比亚迪"
+    market: "SZ"
+    sector: "benchmark"
