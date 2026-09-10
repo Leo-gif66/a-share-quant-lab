@@ -1,0 +1,45 @@
+name: leo_watchlist
+
+stocks:
+
+  automation:
+    - code: "300124"
+      name: "汇川技术"
+
+  finance:
+    - code: "600030"
+      name: "中信证券"
+    - code: "300059"
+      name: "东方财富"
+
+  communication:
+    - code: "000063"
+      name: "中兴通讯"
+
+  defense:
+    - code: "002179"
+      name: "中航光电"
+    - code: "300474"
+      name: "景嘉微"
+
+  energy_equipment:
+    - code: "688187"
+      name: "时代电气"
+    - code: "601727"
+      name: "上海电气"
+
+  power_electronics:
+    - code: "300376"
+      name: "易事特"
+
+  chemical:
+    - code: "600309"
+      name: "万华化学"
+
+  benchmark:
+    - code: "600519"
+      name: "贵州茅台"
+    - code: "300750"
+      name: "宁德时代"
+    - code: "002594"
+      name: "比亚迪"

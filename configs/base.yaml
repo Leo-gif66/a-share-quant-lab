@@ -1,0 +1,61 @@
+project:
+  name: my_a_share_quant
+  seed: 42
+
+data:
+  provider: akshare
+  start_date: "20180101"
+  universe_indexes: ["000300", "000905"]
+  benchmark_symbol: "csi000300"
+  storage_root: "data"
+
+features:
+  enabled:
+    - mom_5
+    - mom_20
+    - mom_60
+    - trend_20
+    - trend_60
+    - vol_20
+    - drawdown_60
+    - volume_ratio_20
+    - turnover_20
+    - liquidity_20
+
+label:
+  horizon: 10
+  type: cross_sectional_excess_return
+
+model:
+  name: rule
+  params:
+    weights:
+      mom_5: 0.08
+      mom_20: 0.15
+      mom_60: 0.17
+      trend_20: 0.10
+      trend_60: 0.10
+      vol_20: -0.10
+      drawdown_60: -0.10
+      volume_ratio_20: 0.05
+      turnover_20: 0.02
+      liquidity_20: 0.03
+
+portfolio:
+  top_n: 10
+  rebalance: weekly
+  risk_on_exposure: 1.0
+  risk_off_exposure: 0.3
+  market_ma_window: 60
+  max_single_weight: 0.10
+
+costs:
+  commission: 0.00025
+  stamp_duty_sell: 0.00050
+  slippage: 0.00100
+
+training:
+  train_ratio: 0.70
+  valid_ratio: 0.15
+  mlflow_uri: "file:./mlruns"
+  experiment_name: "a-share-quant-lab"
