@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -5,6 +6,7 @@ import pandas as pd
 
 from quant.data.downloader import DataDownloader
 from quant.data.providers.akshare import AKShareProvider
+from quant.data.providers.tencent import TencentProvider
 from quant.data.universe import Universe
 
 
@@ -37,6 +39,34 @@ class ProxyAwareFakeAKShare:
             "NO_PROXY": os.environ.get("NO_PROXY"),
         }
         return _akshare_history()
+
+
+class FakeTencentResponse:
+    def __init__(self, payload):
+        self.text = f"kline_dayqfqsh600000={json.dumps(payload)}"
+
+    def raise_for_status(self):
+        return None
+
+
+class FakeTencentSession:
+    def get(self, url, params, timeout):
+        self.url = url
+        self.params = params
+        self.timeout = timeout
+        return FakeTencentResponse(
+            {
+                "code": 0,
+                "data": {
+                    "sh600000": {
+                        "qfqday": [
+                            ["2024-01-03", "10.2", "10.3", "10.4", "10.1", "1000", "10200"],
+                            ["2024-01-02", "10.0", "10.2", "10.3", "9.9", "900", "9200"],
+                        ]
+                    }
+                },
+            }
+        )
 
 
 class FakeUniverse:
@@ -101,6 +131,25 @@ def test_provider_disables_proxy_for_akshare_requests(monkeypatch):
     assert os.environ["HTTP_PROXY"] == "http://proxy.example:8080"
 
 
+def test_tencent_provider_returns_standard_fields():
+    session = FakeTencentSession()
+    provider = TencentProvider(session=session)
+
+    history = provider.get_daily_history("600000", "20240101", "20240131")
+
+    assert list(history.columns) == list(TencentProvider.COLUMNS)
+    assert history["date"].is_monotonic_increasing
+    assert history["amount"].notna().all()
+    assert session.params["param"] == "sh600000,day,2024-01-01,2024-01-31,640,qfq"
+
+
+def test_downloader_defaults_to_tencent_with_akshare_fallback():
+    downloader = DataDownloader(universe=FakeUniverse(), reporter=lambda _: None)
+
+    assert isinstance(downloader.provider, TencentProvider)
+    assert isinstance(downloader.fallback_provider, AKShareProvider)
+
+
 def test_downloader_saves_parquet(tmp_path: Path):
     downloader = DataDownloader(
         universe=FakeUniverse(),
@@ -119,6 +168,25 @@ def test_downloader_saves_parquet(tmp_path: Path):
     assert list(pd.read_parquet(path).columns) == list(AKShareProvider.COLUMNS)
 
 
+def test_downloader_falls_back_to_akshare(tmp_path: Path):
+    messages: list[str] = []
+    downloader = DataDownloader(
+        universe=FakeUniverse(),
+        provider=PartlyFailingProvider(),
+        fallback_provider=AKShareProvider(ak_client=FakeAKShare()),
+        data_dir=tmp_path / "raw",
+        start_date="20240101",
+        end_date="20240131",
+        reporter=messages.append,
+    )
+
+    result = downloader.update()
+
+    assert result["failed"] == {}
+    assert (tmp_path / "raw" / "000001.parquet").exists()
+    assert messages[0].startswith("FALLBACK 000001 PartlyFailingProvider failed:")
+
+
 def test_downloader_continues_after_a_stock_failure(tmp_path: Path):
     messages: list[str] = []
     downloader = DataDownloader(
@@ -128,6 +196,7 @@ def test_downloader_continues_after_a_stock_failure(tmp_path: Path):
         start_date="20240101",
         end_date="20240131",
         reporter=messages.append,
+        enable_fallback=False,
     )
 
     result = downloader.update()

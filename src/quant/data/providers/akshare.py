@@ -11,6 +11,8 @@ from typing import ClassVar
 
 import pandas as pd
 
+from .base import MarketDataProvider
+
 _PROXY_ENV_NAMES = (
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -24,19 +26,10 @@ _PROXY_ENV_NAMES = (
 _PROXY_ENV_LOCK = RLock()
 
 
-class AKShareProvider:
+class AKShareProvider(MarketDataProvider):
     """Fetch A-share daily history and normalize it to the project schema."""
 
-    COLUMNS: ClassVar[tuple[str, ...]] = (
-        "date",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "amount",
-        "turnover",
-    )
+    COLUMNS: ClassVar[tuple[str, ...]] = MarketDataProvider.DAILY_HISTORY_COLUMNS
 
     _COLUMN_MAP: ClassVar[dict[str, str]] = {
         "日期": "date",
