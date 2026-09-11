@@ -13,7 +13,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 
 
-ModelName = Literal["lightgbm", "random_forest", "linear"]
+ModelName = Literal["lightgbm", "random_forest", "linear", "xgboost"]
 
 
 @dataclass(frozen=True)
@@ -83,11 +83,11 @@ def add_future_excess_return(
 
 
 class RankingModel:
-    """Fit LightGBM LambdaRank, RandomForest, or Ridge on whole-date samples."""
+    """Fit LightGBM LambdaRank, RandomForest, Ridge, or optional XGBoost."""
 
     def __init__(self, model_name: ModelName = "random_forest", params: dict[str, object] | None = None) -> None:
-        if model_name not in {"lightgbm", "random_forest", "linear"}:
-            raise ValueError("model_name must be lightgbm, random_forest, or linear")
+        if model_name not in {"lightgbm", "random_forest", "linear", "xgboost"}:
+            raise ValueError("model_name must be lightgbm, random_forest, linear, or xgboost")
         self.model_name = model_name
         self.params = dict(params or {})
         self.model: object | None = None
@@ -109,12 +109,25 @@ class RankingModel:
 
             parameters = {"objective": "lambdarank", "random_state": 0, **self.params}
             model = LGBMRanker(**parameters)
-            relevance = frame.groupby("date")[label].rank(method="average", pct=True).to_numpy()
+            # LambdaRank requires integer relevance labels.  Cross-sectional
+            # ranks preserve the target ordering without treating a continuous
+            # return as an arbitrary relevance gain.
+            relevance = (
+                frame.groupby("date")[label].rank(method="first").astype(int).sub(1).to_numpy()
+            )
             groups = frame.groupby("date", sort=True).size().to_list()
             model.fit(X, relevance, group=groups)
         elif self.model_name == "random_forest":
             parameters = {"random_state": 0, "n_estimators": 100, **self.params}
             model = RandomForestRegressor(**parameters)
+            model.fit(X, y)
+        elif self.model_name == "xgboost":
+            try:
+                from xgboost import XGBRegressor
+            except ImportError as exc:
+                raise RuntimeError("xgboost is not installed; choose another ranking model") from exc
+            parameters = {"random_state": 0, "n_estimators": 100, "n_jobs": 1, **self.params}
+            model = XGBRegressor(**parameters)
             model.fit(X, y)
         else:
             model = Ridge(**self.params)
@@ -149,3 +162,34 @@ class RankingModel:
         target.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(self, target)
         return target
+
+
+def prediction_ic_metrics(
+    data: pd.DataFrame,
+    prediction: pd.Series,
+    label: str,
+    min_cross_section: int = 5,
+) -> dict[str, float]:
+    """Return mean daily Pearson and Spearman IC on an out-of-sample panel."""
+    if "date" not in data or label not in data:
+        raise ValueError("prediction evaluation requires date and label")
+    if min_cross_section < 2:
+        raise ValueError("min_cross_section must be at least two")
+    values = data.loc[:, ["date", label]].copy()
+    values["prediction"] = prediction.reindex(data.index)
+    values["date"] = pd.to_datetime(values["date"], errors="raise")
+    values[label] = pd.to_numeric(values[label], errors="coerce")
+    values["prediction"] = pd.to_numeric(values["prediction"], errors="coerce")
+    pearson: list[float] = []
+    spearman: list[float] = []
+    for _, group in values.groupby("date", sort=True):
+        group = group.dropna()
+        if len(group) < min_cross_section or group["prediction"].nunique() < 2 or group[label].nunique() < 2:
+            continue
+        pearson.append(float(group["prediction"].corr(group[label], method="pearson")))
+        spearman.append(float(group["prediction"].corr(group[label], method="spearman")))
+    return {
+        "prediction_IC": float(np.mean(pearson)) if pearson else np.nan,
+        "prediction_Rank_IC": float(np.mean(spearman)) if spearman else np.nan,
+        "prediction_observations": float(len(pearson)),
+    }

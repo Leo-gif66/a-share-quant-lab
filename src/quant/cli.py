@@ -17,27 +17,52 @@ from .data.providers.tencent_index import TencentIndexProvider
 from .data.storage import Storage
 from .data.universe import Universe
 from .data.universe_builder import UniverseBuilder
-from .data.validator import DataValidator
+from .data.validator import DataValidator, ResearchDataValidator
 from .demo import synthetic_prices
 from .factors.engine import FactorEngine
 from .factors.registry import names as factor_names
 from .features import add_label, build_features
 from .models.factory import names as model_names
-from .models import RankingModel, add_future_excess_return, time_ordered_split
+from .models import (
+    RankingModel,
+    add_future_excess_return,
+    prediction_ic_metrics,
+    time_ordered_split,
+)
 from .paper import PaperAccount, PaperTradingEngine
 from .portfolio import (
     IndustryNeutralPortfolioBacktestEngine,
     InstitutionalPortfolioBacktestEngine,
+    MLRankingPortfolioBacktestEngine,
+    FactorProcessor,
     PortfolioBacktestEngine,
+    compare_portfolio_results,
 )
 from .reporting import ResearchReportBuilder
-from .research import FactorEvaluator, FactorResearchDataBuilder
+from .research import (
+    AnnualWalkForwardResearch,
+    FactorCombinationResearch,
+    FactorEvaluator,
+    FactorResearchDataBuilder,
+    ProfessionalFactorResearchPipeline,
+    RESEARCH_FACTORS,
+)
 from .training import train_model
 
 app=typer.Typer(help="Personal A-share Quant Lab")
 
 
 def cfg(base, override): return load_config(base, override)
+
+
+class _StockSubset:
+    """Small universe adapter used when a batch has partial download coverage."""
+
+    def __init__(self, stocks: list[dict]):
+        self._stocks = stocks
+
+    def stocks(self) -> list[dict]:
+        return self._stocks
 
 
 @app.command("doctor")
@@ -51,16 +76,28 @@ def data_update(
     base: str = "configs/base.yaml",
     override: str | None = None,
     universe_path: str | None = None,
+    start_date: str = "20150101",
+    end_date: str | None = None,
+    max_workers: int = 4,
+    only_missing: bool = False,
 ):
-    """Download every stock in the configured small or expanded universe."""
+    """Incrementally download the configured A-share universe since 2015."""
     c = cfg(base, override)
     selected_universe = universe_path or c["data"].get("universe_path", "configs/universe.yaml")
     universe = Universe(selected_universe)
+    if only_missing:
+        raw_dir = Path(c["data"]["storage_root"]) / "raw"
+        universe = _StockSubset(
+            [stock for stock in universe.stocks() if not (raw_dir / f"{stock['code']}.parquet").exists()]
+        )
     print(f"[bold]Downloading {len(universe.stocks())} stocks from {selected_universe}[/bold]")
     downloader = DataDownloader(
         universe=universe,
         data_dir=Path(c["data"]["storage_root"]) / "raw",
-        start_date=c["data"]["start_date"],
+        start_date=start_date,
+        end_date=end_date,
+        max_workers=max_workers,
+        progress=True,
     )
     result = downloader.update()
     failures_path = Path(c["data"]["storage_root"]) / "raw" / "download_failures.json"
@@ -71,7 +108,8 @@ def data_update(
     print(f"Failures recorded in {failures_path}")
     print(
         f"[bold]Data update complete.[/bold] "
-        f"saved={len(result['saved'])}, failed={len(result['failed'])}"
+        f"saved={len(result['saved'])}, skipped={len(result.get('skipped', []))}, "
+        f"failed={len(result['failed'])}"
     )
 
 
@@ -260,12 +298,46 @@ def data_check(base: str = "configs/base.yaml", override: str | None = None):
             print(f"[green]PASS[/green] {path.stem}")
 
 
-@app.command("factor-build")
-def factor_build(base: str = "configs/base.yaml", override: str | None = None):
-    """Build v0.5 factor parquet files for the configured universe."""
+@app.command("research-check")
+def research_check(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    universe_path: str | None = None,
+):
+    """Report raw-history and feature coverage needed for cross-sectional research."""
     c = cfg(base, override)
     root = Path(c["data"]["storage_root"])
-    engine = FactorEngine(raw_dir=root / "raw", features_dir=root / "features")
+    selected_universe = universe_path or c["data"].get(
+        "universe_path", "configs/universe_large.yaml"
+    )
+    summary = ResearchDataValidator().summarize(
+        Universe(selected_universe).stocks(), raw_dir=root / "raw", features_dir=root / "features"
+    )
+    print(f"Stocks: {summary['stocks']}")
+    print(f"Available histories: {summary['available_histories']}")
+    print(f"Valid: {summary['valid']}")
+    print(f"Feature stocks: {summary['feature_stocks']}")
+    print(f"Average history: {summary['average_days']:.1f} days")
+    print(f"Missing ratio: {summary['missing_ratio']:.2%}")
+    status = "READY" if summary["research_ready"] else "NOT READY"
+    print(f"Research-ready: {status}")
+
+
+@app.command("factor-build")
+def factor_build(base: str = "configs/base.yaml", override: str | None = None):
+    """Build factors for every downloaded member of the configured universe."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    universe = Universe(c["data"].get("universe_path", "configs/universe_large.yaml"))
+    downloaded = [
+        stock for stock in universe.stocks() if (root / "raw" / f"{stock['code']}.parquet").exists()
+    ]
+    if not downloaded:
+        print(f"No raw history files found for {universe.config_path}")
+        return
+    engine = FactorEngine(
+        universe=_StockSubset(downloaded), raw_dir=root / "raw", features_dir=root / "features"
+    )
     built = engine.build_all()
     for code in built:
         print(f"[green]PASS[/green] {code}")
@@ -404,26 +476,104 @@ def ml_train(
     panel = FactorResearchDataBuilder(features_dir=root / "features", raw_dir=root / "raw").build()
     benchmark = pd.read_parquet(root / "raw" / "000300.parquet")
     labelled = add_future_excess_return(panel, benchmark)
-    excluded = {
-        "date", "code", "open", "high", "low", "close", "volume", "amount", "turnover",
-        "future_return_20d", "benchmark_future_return_20d", "future_excess_return_20d",
-    }
-    features = [
-        column
-        for column in labelled.select_dtypes(include="number").columns
-        if column not in excluded and not column.startswith("future_")
-    ]
-    if not features:
-        raise typer.BadParameter("no numeric factor columns available for model training")
-    split = time_ordered_split(labelled.dropna(subset=["future_excess_return_20d"]), purge_dates=20)
+    processor = FactorProcessor.from_yaml()
+    normalized = processor.process(labelled)
+    features = [f"{factor}_z" for factor in processor.factor_names]
+    split = time_ordered_split(normalized.dropna(subset=["future_excess_return_20d"]), purge_dates=20)
     model = RankingModel(model_name)  # type: ignore[arg-type]
     model.fit(split.train, features, "future_excess_return_20d")
     output = Path(output_dir)
     model_path = model.save(output / f"{model_name}_ranking.joblib")
     importance = model.feature_importance()
     importance.to_csv(output / f"{model_name}_feature_importance.csv", index=False)
+    metrics = prediction_ic_metrics(
+        split.test, model.predict(split.test), "future_excess_return_20d"
+    )
+    (output / f"{model_name}_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     print(f"Model saved: {model_path}")
+    print(json.dumps(metrics, indent=2))
     print(importance.to_string(index=False))
+
+
+@app.command("alpha-research")
+def alpha_research(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    output_dir: str = "research/results",
+    min_cross_section: int = 20,
+):
+    """Run neutralized factor statistics, combinations, and annual walk-forward research."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    pipeline = ProfessionalFactorResearchPipeline(
+        features_dir=root / "features", raw_dir=root / "raw", min_cross_section=min_cross_section
+    )
+    try:
+        result = pipeline.run(output_dir)
+    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        print(f"[red]FAILED[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    neutral_factors = [f"{factor}_neutralized" for factor in RESEARCH_FACTORS]
+    _scores, weights = FactorCombinationResearch().compare(result.neutralized_panel, neutral_factors, result)
+    directory = Path(output_dir)
+    weights.to_csv(directory / "factor_weights_report.csv", index=False)
+    walk_forward = AnnualWalkForwardResearch().run(
+        result.neutralized_panel, neutral_factors, output_path=directory / "walk_forward_report.csv"
+    )
+    importance_path = Path("models/random_forest_feature_importance.csv")
+    importance = pd.read_csv(importance_path) if importance_path.exists() else pd.DataFrame()
+    comparison_path = directory / "alpha_backtest_comparison.csv"
+    comparison = pd.read_csv(comparison_path) if comparison_path.exists() else pd.DataFrame()
+    report = ResearchReportBuilder().build_alpha_research(
+        result.summary.sort_values("ICIR", ascending=False),
+        result.yearly_stability,
+        importance,
+        walk_forward,
+        comparison,
+    )
+    print(f"Factor summary: {directory / 'factor_research_summary.csv'}")
+    print(f"Factor weights: {directory / 'factor_weights_report.csv'}")
+    print(f"Walk-forward report: {directory / 'walk_forward_report.csv'}")
+    print(f"Alpha research report: {report}")
+    print(result.summary.sort_values("ICIR", ascending=False).to_string(index=False))
+
+
+@app.command("alpha-backtest")
+def alpha_backtest(
+    model_name: str = "random_forest",
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+):
+    """Compare handcrafted institutional targets with matured-label ML ranking."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    handcrafted = InstitutionalPortfolioBacktestEngine(features_dir=root / "features", raw_dir=root / "raw").run()
+    ml_engine = MLRankingPortfolioBacktestEngine(
+        features_dir=root / "features", raw_dir=root / "raw", model_name=model_name  # type: ignore[arg-type]
+    )
+    ml = ml_engine.run()
+    comparison = compare_portfolio_results(handcrafted, ml).table
+    output_dir = Path("research/results")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    comparison.to_csv(output_dir / "alpha_backtest_comparison.csv", index=False)
+    if not ml_engine.ml_feature_importance.empty:
+        ml_engine.ml_feature_importance.to_csv("models/ml_portfolio_feature_importance.csv", index=False)
+    factor_summary_path = output_dir / "factor_research_summary.csv"
+    factor_stability_path = output_dir / "factor_stability.csv"
+    walk_forward_path = output_dir / "walk_forward_report.csv"
+    importance_path = Path("models") / f"{model_name}_feature_importance.csv"
+    report = ResearchReportBuilder().build_alpha_research(
+        pd.read_csv(factor_summary_path) if factor_summary_path.exists() else pd.DataFrame(),
+        pd.read_csv(factor_stability_path) if factor_stability_path.exists() else pd.DataFrame(),
+        ml_engine.ml_feature_importance if not ml_engine.ml_feature_importance.empty else (
+            pd.read_csv(importance_path) if importance_path.exists() else pd.DataFrame()
+        ),
+        pd.read_csv(walk_forward_path) if walk_forward_path.exists() else pd.DataFrame(),
+        comparison,
+    )
+    print("[bold]Handcrafted vs ML-ranking portfolio[/bold]")
+    print(comparison.to_string(index=False))
+    print(f"Alpha research report: {report}")
 
 
 @app.command("report-build")

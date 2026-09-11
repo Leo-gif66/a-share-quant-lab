@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, ClassVar
 
 import pandas as pd
 import requests
@@ -16,19 +18,35 @@ class TencentProvider(MarketDataProvider):
     """Fetch forward-adjusted A-share daily K-lines from Tencent Finance."""
 
     ENDPOINT = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+    # Tencent's legacy hostname occasionally returns HTTP 501 even though the
+    # identical service remains available through the official finance proxy.
+    PROXY_ENDPOINT = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get"
     COLUMNS = MarketDataProvider.DAILY_HISTORY_COLUMNS
     _MAX_ROWS_PER_REQUEST = 640
     # A calendar interval of 600 days is safely below Tencent's 640 trading-bar
     # response cap, while still keeping a multi-year update reasonably small.
     _MAX_DAYS_PER_REQUEST = 600
+    _REQUEST_LOCK: ClassVar[threading.Lock] = threading.Lock()
+    _LAST_REQUEST_AT: ClassVar[float] = 0.0
 
-    def __init__(self, session: requests.Session | None = None, timeout: float = 15.0) -> None:
-        self._session = session or requests.Session()
+    def __init__(
+        self, session: requests.Session | None = None, timeout: float = 15.0, request_pause: float = 0.05
+    ) -> None:
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
+        if request_pause < 0:
+            raise ValueError("request_pause cannot be negative")
+        # ``requests.Session`` is not a safe shared mutable transport for a
+        # ThreadPoolExecutor. Keep an injected session for deterministic tests,
+        # while production downloads get one proxy-free session per worker.
+        self._session = session
+        self._sessions = threading.local() if session is None else None
         # The Tencent provider should work in the same proxy-free environment as
         # AKShare and should not inherit a user's system proxy configuration.
-        if hasattr(self._session, "trust_env"):
-            self._session.trust_env = False
+        if session is not None and hasattr(session, "trust_env"):
+            session.trust_env = False
         self.timeout = timeout
+        self.request_pause = request_pause
 
     def get_daily_history(
         self,
@@ -72,7 +90,12 @@ class TencentProvider(MarketDataProvider):
                 f"{self._MAX_ROWS_PER_REQUEST},qfq"
             ),
         }
-        response = self._session.get(self.ENDPOINT, params=params, timeout=self.timeout)
+        session = self._active_session()
+        self._rate_limit()
+        response = session.get(self.ENDPOINT, params=params, timeout=self.timeout)
+        if getattr(response, "status_code", 200) == 501:
+            self._rate_limit()
+            response = session.get(self.PROXY_ENDPOINT, params=params, timeout=self.timeout)
         response.raise_for_status()
         payload = self._parse_payload(response.text)
 
@@ -129,6 +152,32 @@ class TencentProvider(MarketDataProvider):
         if not isinstance(payload, dict):
             raise TypeError("Tencent Finance response root must be a JSON object")
         return payload
+
+    def _active_session(self) -> requests.Session:
+        if self._session is not None:
+            return self._session
+        assert self._sessions is not None
+        session = getattr(self._sessions, "session", None)
+        if session is None:
+            session = self._new_session()
+            self._sessions.session = session
+        return session
+
+    def _rate_limit(self) -> None:
+        if self.request_pause <= 0:
+            return
+        with self._REQUEST_LOCK:
+            now = time.monotonic()
+            wait = self.request_pause - (now - self._LAST_REQUEST_AT)
+            if wait > 0:
+                time.sleep(wait)
+            type(self)._LAST_REQUEST_AT = time.monotonic()
+
+    @staticmethod
+    def _new_session() -> requests.Session:
+        session = requests.Session()
+        session.trust_env = False
+        return session
 
     @staticmethod
     def _to_tencent_symbol(symbol: str) -> str:

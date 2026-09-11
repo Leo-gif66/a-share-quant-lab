@@ -98,3 +98,72 @@ class DataValidator:
             else:
                 current = 0
         return longest
+
+
+class ResearchDataValidator:
+    """Summarize whether a universe has enough clean raw and feature history.
+
+    This is intentionally a read-only check. It uses the same price-quality
+    rules as ``data-check`` and never treats a file's mere presence as a valid
+    research history.
+    """
+
+    def __init__(
+        self,
+        data_validator: DataValidator | None = None,
+        minimum_coverage: float = 0.95,
+    ) -> None:
+        if not 0 < minimum_coverage <= 1:
+            raise ValueError("minimum_coverage must be between zero and one")
+        self.data_validator = data_validator or DataValidator()
+        self.minimum_coverage = minimum_coverage
+
+    def summarize(
+        self,
+        stocks: list[dict],
+        raw_dir: str | Path = "data/raw",
+        features_dir: str | Path = "data/features",
+    ) -> dict[str, int | float | bool]:
+        """Return coverage and readiness metrics for the supplied universe."""
+        raw_root = Path(raw_dir)
+        feature_root = Path(features_dir)
+        codes = list(dict.fromkeys(str(stock["code"]).zfill(6) for stock in stocks))
+        available = valid = feature_stocks = total_days = 0
+
+        for code in codes:
+            raw_path = raw_root / f"{code}.parquet"
+            if not raw_path.exists():
+                continue
+            frame: pd.DataFrame | None
+            try:
+                frame = pd.read_parquet(raw_path)
+            except Exception:  # noqa: BLE001 - a corrupt file is unavailable for research
+                frame = None
+            if frame is None:
+                continue
+            available += 1
+            total_days += len(frame)
+            if not self.data_validator.validate(frame):
+                valid += 1
+            feature_path = feature_root / f"{code}.parquet"
+            if feature_path.exists():
+                feature_stocks += 1
+
+        stock_count = len(codes)
+        valid_ratio = valid / stock_count if stock_count else 0.0
+        feature_ratio = feature_stocks / stock_count if stock_count else 0.0
+        return {
+            "stocks": stock_count,
+            "available_histories": available,
+            "valid": valid,
+            "feature_stocks": feature_stocks,
+            "average_days": total_days / available if available else 0.0,
+            "missing_ratio": (stock_count - available) / stock_count if stock_count else 0.0,
+            "valid_ratio": valid_ratio,
+            "feature_ratio": feature_ratio,
+            "research_ready": bool(
+                stock_count
+                and valid_ratio >= self.minimum_coverage
+                and feature_ratio >= self.minimum_coverage
+            ),
+        }

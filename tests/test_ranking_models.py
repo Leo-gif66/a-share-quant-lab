@@ -1,6 +1,11 @@
 import pandas as pd
 
-from quant.models import RankingModel, add_future_excess_return, time_ordered_split
+from quant.models import (
+    RankingModel,
+    add_future_excess_return,
+    prediction_ic_metrics,
+    time_ordered_split,
+)
 
 
 def _ranking_panel() -> pd.DataFrame:
@@ -25,11 +30,13 @@ def test_ranking_model_uses_time_split_and_exposes_feature_importance(tmp_path):
 
     prediction = model.predict(split.test)
     importance = model.feature_importance()
+    metrics = prediction_ic_metrics(split.test, prediction, "future_excess_return_20d", min_cross_section=2)
     path = model.save(tmp_path / "models" / "ranker.joblib")
 
     assert split.train["date"].max() < split.validation["date"].min() < split.test["date"].min()
     assert len(prediction) == len(split.test)
     assert set(importance["feature"]) == {"factor_a", "factor_b"}
+    assert {"prediction_IC", "prediction_Rank_IC"}.issubset(metrics)
     assert path.exists()
 
 

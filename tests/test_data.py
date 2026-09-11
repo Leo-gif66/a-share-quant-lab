@@ -69,6 +69,17 @@ class FakeTencentSession:
         )
 
 
+class FallbackTencentSession(FakeTencentSession):
+    def __init__(self):
+        self.urls: list[str] = []
+
+    def get(self, url, params, timeout):
+        self.urls.append(url)
+        response = super().get(url, params, timeout)
+        response.status_code = 501 if len(self.urls) == 1 else 200
+        return response
+
+
 class FakeUniverse:
     def stocks(self):
         return [{"code": "000001", "name": "Test stock", "category": "test"}]
@@ -141,6 +152,15 @@ def test_tencent_provider_returns_standard_fields():
     assert history["date"].is_monotonic_increasing
     assert history["amount"].notna().all()
     assert session.params["param"] == "sh600000,day,2024-01-01,2024-01-31,640,qfq"
+
+
+def test_tencent_provider_retries_legacy_501_through_tencent_proxy():
+    session = FallbackTencentSession()
+
+    history = TencentProvider(session=session).get_daily_history("600000", "20240101", "20240131")
+
+    assert not history.empty
+    assert session.urls == [TencentProvider.ENDPOINT, TencentProvider.PROXY_ENDPOINT]
 
 
 def test_downloader_defaults_to_tencent_with_akshare_fallback():

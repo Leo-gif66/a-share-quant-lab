@@ -60,6 +60,35 @@ class ResearchReportBuilder:
             output,
         )
 
+    def build_alpha_research(
+        self,
+        factor_ic: pd.DataFrame,
+        factor_stability: pd.DataFrame,
+        feature_importance: pd.DataFrame,
+        walk_forward: pd.DataFrame,
+        portfolio_comparison: pd.DataFrame,
+        output: str | Path = "reports/alpha_research.html",
+    ) -> Path:
+        """Render the v2.1-v2.5 research artifacts without inventing sections."""
+        sections = (
+            ("Factor IC ranking", factor_ic),
+            ("Factor stability", factor_stability),
+            ("ML feature importance", feature_importance),
+            ("Walk-forward performance", walk_forward),
+            ("Portfolio comparison", portfolio_comparison),
+        )
+        body = "\n".join(
+            f"<section><h2>{escape(title)}</h2>{_table(table)}</section>" for title, table in sections
+        )
+        document = f"""<!doctype html>
+<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Alpha Research Report</title>
+<style>body{{font-family:Arial,sans-serif;margin:2rem}}table{{border-collapse:collapse;margin-bottom:1.5rem}}th,td{{border:1px solid #ccc;padding:.4rem;text-align:right}}th:first-child,td:first-child{{text-align:left}}h1{{margin-bottom:2rem}}</style>
+</head><body><h1>Alpha Research Report</h1>{body}</body></html>"""
+        target = Path(output)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(document, encoding="utf-8")
+        return target
+
 
 def _metric_table(metrics: Mapping[str, float], names: tuple[str, ...]) -> pd.DataFrame:
     return pd.DataFrame(

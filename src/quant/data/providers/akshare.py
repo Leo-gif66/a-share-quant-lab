@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -52,7 +53,9 @@ class AKShareProvider(MarketDataProvider):
         "turnover": "turnover",
     }
 
-    def __init__(self, ak_client=None, disable_proxy: bool = True) -> None:
+    def __init__(
+        self, ak_client=None, disable_proxy: bool = True, request_timeout: float = 20.0
+    ) -> None:
         """Create a provider, optionally injecting an AKShare-compatible client.
 
         With ``disable_proxy=True`` (the default), every request issued through
@@ -64,6 +67,9 @@ class AKShareProvider(MarketDataProvider):
             ak_client = ak
         self._ak = ak_client
         self.disable_proxy = disable_proxy
+        if request_timeout <= 0:
+            raise ValueError("request_timeout must be positive")
+        self.request_timeout = request_timeout
 
     def get_daily_history(
         self,
@@ -79,13 +85,16 @@ class AKShareProvider(MarketDataProvider):
         to handle that API detail themselves.
         """
         with self._without_environment_proxy():
-            raw = self._ak.stock_zh_a_hist(
-                symbol=str(symbol).zfill(6),
-                period="daily",
-                start_date=self._format_date(start_date),
-                end_date=self._format_date(end_date),
-                adjust=adjust,
-            )
+            request = {
+                "symbol": str(symbol).zfill(6),
+                "period": "daily",
+                "start_date": self._format_date(start_date),
+                "end_date": self._format_date(end_date),
+                "adjust": adjust,
+            }
+            if self._supports_timeout():
+                request["timeout"] = self.request_timeout
+            raw = self._ak.stock_zh_a_hist(**request)
         if raw is None:
             raise RuntimeError(f"AKShare returned no data for {symbol}")
         if not isinstance(raw, pd.DataFrame):
@@ -108,6 +117,17 @@ class AKShareProvider(MarketDataProvider):
     @staticmethod
     def _format_date(value: str | date | datetime) -> str:
         return pd.Timestamp(value).strftime("%Y%m%d")
+
+    def _supports_timeout(self) -> bool:
+        """Avoid breaking injectable clients that deliberately expose a narrow API."""
+        try:
+            parameters = inspect.signature(self._ak.stock_zh_a_hist).parameters.values()
+        except (TypeError, ValueError):
+            return False
+        return any(
+            parameter.name == "timeout" or parameter.kind is parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
 
     @contextmanager
     def _without_environment_proxy(self) -> Iterator[None]:

@@ -72,7 +72,7 @@ class PortfolioBacktestEngine:
     def run(self) -> PortfolioBacktestResult:
         """Run v1.0, trading each signal at the following session's open."""
         panel = self._load_feature_panel()
-        scores = self.scorer.score_and_store(panel, self.features_dir / "composite_score.parquet")
+        scores = self._score_panel(panel)
         dates = pd.DatetimeIndex(sorted(panel["date"].unique()))
         targets = self._rebalance_targets(scores, dates)
         benchmark_prices = self._load_benchmark_prices(dates)
@@ -163,6 +163,10 @@ class PortfolioBacktestEngine:
         if len(common_dates) < 2:
             raise RuntimeError("feature files do not share enough trading dates for backtesting")
         return panel.loc[panel["date"].isin(common_dates)].reset_index(drop=True)
+
+    def _score_panel(self, panel: pd.DataFrame) -> pd.DataFrame:
+        """Build v1.0 composite scores; subclasses may supply other alpha scores."""
+        return self.scorer.score_and_store(panel, self.features_dir / "composite_score.parquet")
 
     def _rebalance_targets(
         self, scores: pd.DataFrame, dates: pd.DatetimeIndex
