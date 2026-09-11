@@ -1,0 +1,29 @@
+method: icir
+factors:
+  momentum_5:
+    weight: 0.03542914225956034
+    direction: 1
+  momentum_20:
+    weight: 0.04899343926343022
+    direction: 1
+  momentum_60:
+    weight: 0.06467834342975025
+    direction: 1
+  trend_20:
+    weight: 0.0213804791574876
+    direction: 1
+  trend_60:
+    weight: 0.04429235082210691
+    direction: 1
+  volatility:
+    weight: 0.5101988829135768
+    direction: -1
+  liquidity:
+    weight: 0.0
+    direction: 1
+  turnover:
+    weight: 0.0
+    direction: 1
+  drawdown:
+    weight: 0.27502736215408774
+    direction: -1

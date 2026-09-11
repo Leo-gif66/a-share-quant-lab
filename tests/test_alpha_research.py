@@ -72,6 +72,17 @@ def test_combination_and_annual_walk_forward_use_only_matured_training_labels(tm
     assert {"factor", "weight", "IC", "stability"}.issubset(weights.columns)
     assert len(scores) == len(panel) * 5
 
+    streamed_scores, streamed_weights = FactorCombinationResearch(
+        horizon=5, rolling_window=30, reweight_interval=5
+    ).compare(
+        panel,
+        ["factor_a_neutralized", "factor_b_neutralized"],
+        evaluation,
+        collect_scores=False,
+    )
+    assert streamed_scores.empty
+    assert len(streamed_weights) == len(weights)
+
     # Build a calendar-year panel to exercise the 2018-2021 -> 2022 schedule.
     dates = pd.date_range("2018-01-01", "2025-12-01", freq="BMS")
     yearly = pd.concat(

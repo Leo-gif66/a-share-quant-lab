@@ -9,9 +9,11 @@ from .industry_neutral import (
     industry_exposure,
 )
 from .institutional import InstitutionalPortfolioBacktestEngine
+from .intelligent import IntelligentBacktestResult, IntelligentPortfolioBacktestEngine
 from .alpha import AlphaBacktestComparison, MLRankingPortfolioBacktestEngine, compare_portfolio_results
 from .optimizer import EqualWeightOptimizer
 from .scoring import CompositeScorer
+from .allocator import AllocationResult, AllocationSettings, PortfolioAllocator
 
 __all__ = [
     "CompositeScorer",
@@ -21,12 +23,17 @@ __all__ = [
     "IndustryNeutralBuilder",
     "IndustryNeutralPortfolioBacktestEngine",
     "InstitutionalPortfolioBacktestEngine",
+    "IntelligentBacktestResult",
+    "IntelligentPortfolioBacktestEngine",
     "MLRankingPortfolioBacktestEngine",
     "PortfolioBacktestEngine",
     "PortfolioBacktestResult",
     "PortfolioConstraints",
     "AlphaBacktestComparison",
     "compare_portfolio_results",
+    "AllocationResult",
+    "AllocationSettings",
+    "PortfolioAllocator",
     "industry_exposure",
     "load_factor_specs",
 ]

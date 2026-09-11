@@ -12,6 +12,7 @@ from sklearn.ensemble import RandomForestRegressor
 
 from ..data.universe import Universe
 from ..factors.advanced import AdvancedFactorEngine
+from .preprocessing import ResearchPreprocessor
 
 
 RESEARCH_FACTORS: tuple[str, ...] = (
@@ -29,6 +30,7 @@ class FactorResearchResult:
     daily: pd.DataFrame
     yearly_stability: pd.DataFrame
     neutralized_panel: pd.DataFrame
+    factor_coverage: pd.DataFrame
 
 
 class FactorNeutralizer:
@@ -39,6 +41,8 @@ class FactorNeutralizer:
             raise ValueError("sigma must be positive and min_observations at least two")
         self.sigma = sigma
         self.min_observations = min_observations
+        self.preprocessor = ResearchPreprocessor(sigma=sigma)
+        self.last_coverage = pd.DataFrame(columns=ResearchPreprocessor.COVERAGE_COLUMNS)
 
     def transform(
         self,
@@ -53,7 +57,9 @@ class FactorNeutralizer:
             raise ValueError(f"factor panel missing columns: {', '.join(sorted(required.difference(panel.columns)))}")
         if require_market_cap and market_cap_column not in panel:
             raise ValueError("market-cap neutralization requires a point-in-time market_cap column")
-        values = panel.copy()
+        cleaned = self.preprocessor.process(panel, factors)
+        values = cleaned.data
+        self.last_coverage = cleaned.coverage
         values["date"] = pd.to_datetime(values["date"], errors="raise")
         if industry_column not in values:
             values[industry_column] = "Unknown"
@@ -64,25 +70,74 @@ class FactorNeutralizer:
             values[factor] = pd.to_numeric(values[factor], errors="coerce")
             values[f"{factor}_neutralized"] = np.nan
 
+        neutral_columns = [f"{factor}_neutralized" for factor in factors]
         for _, group in values.groupby("date", sort=False):
             indices = group.index
-            for factor in factors:
-                raw = group[factor]
-                valid = raw.dropna()
-                if len(valid) < self.min_observations:
-                    continue
-                mean, std = valid.mean(), valid.std(ddof=0)
-                clipped = raw.clip(mean - self.sigma * std, mean + self.sigma * std) if std > 0 else raw
-                residual = self._residualize(clipped, group, industry_column, market_cap_column)
-                residual_valid = residual.dropna()
-                residual_std = residual_valid.std(ddof=0)
-                normalized = (
-                    (residual - residual_valid.mean()) / residual_std
-                    if residual_std > 0
-                    else residual * 0.0
-                )
-                values.loc[indices, f"{factor}_neutralized"] = normalized.to_numpy()
+            # The design matrix is identical for every factor in one cross
+            # section.  Solve all usable factor columns at once rather than
+            # performing one QR decomposition per factor.  This preserves
+            # the same industry/cap residualization while making full-universe
+            # research practical.
+            neutralized = self._neutralize_group(
+                group, factors, industry_column, market_cap_column
+            )
+            values.loc[indices, neutral_columns] = neutralized.to_numpy()
         return values
+
+    def _neutralize_group(
+        self,
+        group: pd.DataFrame,
+        factors: Sequence[str],
+        industry_column: str,
+        market_cap_column: str,
+    ) -> pd.DataFrame:
+        """Return z-scored residuals for a single rebalance cross-section.
+
+        The shared preprocessor has already imputed partial factor gaps within
+        each date.  A factor that remains incomplete therefore has no usable
+        observations at that date and is left as ``NaN``; all remaining factor
+        columns can safely share one neutralization design matrix.
+        """
+        output_columns = [f"{factor}_neutralized" for factor in factors]
+        output = pd.DataFrame(np.nan, index=group.index, columns=output_columns)
+        usable = [
+            factor
+            for factor in factors
+            if group[factor].notna().sum() >= self.min_observations
+            and group[factor].notna().all()
+        ]
+        if not usable:
+            return output
+
+        columns: list[np.ndarray] = [np.ones(len(group), dtype=float)]
+        industry = group[industry_column]
+        dummies = pd.get_dummies(industry, dtype=float)
+        if dummies.shape[1] > 1:
+            columns.extend(dummies.iloc[:, 1:].to_numpy().T)
+        if market_cap_column in group:
+            cap = pd.to_numeric(group[market_cap_column], errors="coerce")
+            valid_cap = cap > 0
+            if valid_cap.all():
+                columns.append(np.log(cap).to_numpy())
+            elif valid_cap.any():
+                columns.append(np.log(cap.where(valid_cap, cap[valid_cap].median())).to_numpy())
+
+        design = np.column_stack(columns)
+        response = group.loc[:, usable].to_numpy(dtype=float)
+        if len(group) <= design.shape[1]:
+            residuals = response - np.nanmean(response, axis=0, keepdims=True)
+        else:
+            coefficients, *_ = np.linalg.lstsq(design, response, rcond=None)
+            residuals = response - design @ coefficients
+        standard_deviation = residuals.std(axis=0, ddof=0)
+        normalized = np.divide(
+            residuals - residuals.mean(axis=0, keepdims=True),
+            standard_deviation,
+            out=np.zeros_like(residuals),
+            where=standard_deviation > 0,
+        )
+        output.loc[:, [f"{factor}_neutralized" for factor in usable]] = normalized
+        return output
 
     def _residualize(
         self,
@@ -127,24 +182,32 @@ class ProfessionalFactorEvaluator:
 
     SUMMARY_COLUMNS = (
         "factor", "IC", "Rank_IC", "IC_mean", "IC_std", "ICIR", "t_stat",
-        "annualized_long_short_return", "stability", "observations",
+        "annualized_long_short_return", "stability", "observations", "coverage_pct",
+        "nan_ratio", "valid_samples", "IC_sample_count", "status",
     )
 
-    def __init__(self, horizon: int = 20, min_cross_section: int = 20, quantile: float = 0.2) -> None:
-        if horizon < 1 or min_cross_section < 2 or not 0 < quantile <= 0.5:
+    def __init__(
+        self,
+        horizon: int = 20,
+        min_cross_section: int = 20,
+        quantile: float = 0.2,
+        min_ic_samples: int = 20,
+    ) -> None:
+        if horizon < 1 or min_cross_section < 2 or min_ic_samples < 2 or not 0 < quantile <= 0.5:
             raise ValueError("invalid factor evaluation settings")
         self.horizon = horizon
         self.min_cross_section = min_cross_section
         self.quantile = quantile
+        self.min_ic_samples = min_ic_samples
+        self.preprocessor = ResearchPreprocessor()
 
     def evaluate(
         self, panel: pd.DataFrame, factors: Sequence[str], target: str = "future_excess_return_20d"
     ) -> FactorResearchResult:
         if not {"date", target, *factors}.issubset(panel.columns):
             raise ValueError("factor evaluation panel is missing required columns")
-        frame = panel.copy()
-        frame["date"] = pd.to_datetime(frame["date"], errors="raise")
-        frame[target] = pd.to_numeric(frame[target], errors="coerce")
+        cleaned = self.preprocessor.process(panel, factors, target_columns=(target,))
+        frame = cleaned.data
         daily_records: list[dict[str, object]] = []
         for factor in factors:
             values = pd.to_numeric(frame[factor], errors="coerce")
@@ -164,21 +227,26 @@ class ProfessionalFactorEvaluator:
                     }
                 )
         daily = pd.DataFrame(daily_records, columns=["date", "factor", "IC", "Rank_IC", "long_short_return", "observations"])
-        summary, yearly = self._summarize(daily, factors)
-        return FactorResearchResult(summary, daily, yearly, panel)
+        summary, yearly = self._summarize(daily, factors, cleaned.coverage)
+        return FactorResearchResult(summary, daily, yearly, frame, cleaned.coverage)
 
-    def _summarize(self, daily: pd.DataFrame, factors: Sequence[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def _summarize(
+        self, daily: pd.DataFrame, factors: Sequence[str], coverage: pd.DataFrame
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         records: list[dict[str, object]] = []
         yearly_records: list[dict[str, object]] = []
         for factor in factors:
             series = daily.loc[daily["factor"] == factor].copy()
             ic = series["IC"].dropna()
-            ic_mean = float(ic.mean()) if not ic.empty else np.nan
-            ic_std = float(ic.std(ddof=1)) if len(ic) > 1 else np.nan
+            coverage_row = coverage.loc[coverage["factor"] == factor]
+            coverage_values = coverage_row.iloc[0] if not coverage_row.empty else None
+            sufficient = len(ic) >= self.min_ic_samples
+            ic_mean = float(ic.mean()) if sufficient else np.nan
+            ic_std = float(ic.std(ddof=1)) if sufficient and len(ic) > 1 else np.nan
             icir = ic_mean / ic_std if pd.notna(ic_std) and ic_std > 0 else np.nan
             t_stat = ic_mean / (ic_std / np.sqrt(len(ic))) if pd.notna(ic_std) and ic_std > 0 else np.nan
             long_short = series["long_short_return"].dropna()
-            mean_spread = float(long_short.mean()) if not long_short.empty else np.nan
+            mean_spread = float(long_short.mean()) if sufficient and not long_short.empty else np.nan
             annualized = (
                 float((1 + mean_spread) ** (252 / self.horizon) - 1)
                 if pd.notna(mean_spread) and mean_spread > -1
@@ -193,20 +261,28 @@ class ProfessionalFactorEvaluator:
                 if direction != 0 and not years.empty
                 else np.nan
             )
-            for row in years.itertuples(index=False):
+            for year_row in years.itertuples(index=False):
                 yearly_records.append(
                     {
-                        "factor": factor, "year": int(row.year), "IC_mean": row.IC_mean,
-                        "Rank_IC_mean": row.Rank_IC_mean, "observations": row.observations,
+                        "factor": factor, "year": int(year_row.year), "IC_mean": year_row.IC_mean,
+                        "Rank_IC_mean": year_row.Rank_IC_mean, "observations": year_row.observations,
                     }
                 )
             records.append(
                 {
                     "factor": factor, "IC": ic_mean,
-                    "Rank_IC": float(series["Rank_IC"].mean()) if not series.empty else np.nan,
+                    "Rank_IC": float(series["Rank_IC"].mean()) if sufficient else np.nan,
                     "IC_mean": ic_mean, "IC_std": ic_std, "ICIR": icir, "t_stat": t_stat,
                     "annualized_long_short_return": annualized, "stability": stability,
                     "observations": int(len(ic)),
+                    "coverage_pct": float(coverage_values["coverage_pct"])
+                    if coverage_values is not None else 0.0,
+                    "nan_ratio": float(coverage_values["nan_ratio"])
+                    if coverage_values is not None else 1.0,
+                    "valid_samples": int(coverage_values["valid_samples"])
+                    if coverage_values is not None else 0,
+                    "IC_sample_count": int(len(ic)),
+                    "status": "ok" if sufficient else "insufficient_data",
                 }
             )
         return (
@@ -316,11 +392,15 @@ class ProfessionalFactorResearchPipeline:
         result.summary["factor"] = result.summary["factor"].str.removesuffix("_neutralized")
         result.daily["factor"] = result.daily["factor"].str.removesuffix("_neutralized")
         result.yearly_stability["factor"] = result.yearly_stability["factor"].str.removesuffix("_neutralized")
+        result.factor_coverage["factor"] = result.factor_coverage["factor"].str.removesuffix(
+            "_neutralized"
+        )
         directory = Path(output_dir)
         directory.mkdir(parents=True, exist_ok=True)
         result.summary.to_csv(directory / "factor_research_summary.csv", index=False)
         result.daily.to_csv(directory / "factor_daily_ic.csv", index=False)
         result.yearly_stability.to_csv(directory / "factor_stability.csv", index=False)
+        result.factor_coverage.to_csv(directory / "factor_coverage.csv", index=False)
         return result
 
 
@@ -329,12 +409,30 @@ class FactorCombinationResearch:
 
     METHODS = ("equal", "ic", "icir", "regression", "ml")
 
-    def __init__(self, horizon: int = 20, rolling_window: int = 252, reweight_interval: int = 20) -> None:
-        if min(horizon, rolling_window, reweight_interval) < 1:
+    def __init__(
+        self,
+        horizon: int = 20,
+        rolling_window: int = 252,
+        reweight_interval: int = 20,
+        ml_reweight_interval: int = 60,
+        max_ml_samples: int = 20_000,
+        ml_estimators: int = 20,
+    ) -> None:
+        if min(
+            horizon,
+            rolling_window,
+            reweight_interval,
+            ml_reweight_interval,
+            max_ml_samples,
+            ml_estimators,
+        ) < 1:
             raise ValueError("combination windows must be positive")
         self.horizon = horizon
         self.rolling_window = rolling_window
         self.reweight_interval = reweight_interval
+        self.ml_reweight_interval = ml_reweight_interval
+        self.max_ml_samples = max_ml_samples
+        self.ml_estimators = ml_estimators
 
     def compare(
         self,
@@ -342,6 +440,7 @@ class FactorCombinationResearch:
         factors: Sequence[str],
         evaluation: FactorResearchResult,
         target: str = "future_excess_return_20d",
+        collect_scores: bool = True,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         if not {"date", "code", target, *factors}.issubset(panel.columns):
             raise ValueError("combination panel is missing required columns")
@@ -356,6 +455,7 @@ class FactorCombinationResearch:
         weights_by_method = {method: np.repeat(1 / len(factors), len(factors)) for method in self.METHODS}
         score_frames: list[pd.DataFrame] = []
         weight_records: list[dict[str, object]] = []
+        last_ml_reweight = -self.ml_reweight_interval
         for index, date in enumerate(dates):
             if index % self.reweight_interval == 0:
                 cutoff = dates[max(0, index - self.horizon)]
@@ -365,11 +465,20 @@ class FactorCombinationResearch:
                 weights_by_method["ic"] = self._ic_weights(daily, cutoff, factors, False)
                 weights_by_method["icir"] = self._ic_weights(daily, cutoff, factors, True)
                 weights_by_method["regression"] = self._regression_weights(history, factors, target)
-                weights_by_method["ml"] = self._ml_weights(history, factors, target)
+                if index - last_ml_reweight >= self.ml_reweight_interval:
+                    weights_by_method["ml"] = self._ml_weights(
+                        history,
+                        factors,
+                        target,
+                        max_samples=self.max_ml_samples,
+                        estimators=self.ml_estimators,
+                    )
+                    last_ml_reweight = index
             day = values.loc[values["date"] == date]
             for method, weights in weights_by_method.items():
-                factor_score = sum(day[factor].fillna(0.0) * weight for factor, weight in zip(factors, weights, strict=True))
-                score_frames.append(pd.DataFrame({"date": date, "code": day["code"], "method": method, "factor_score": factor_score}))
+                if collect_scores:
+                    factor_score = sum(day[factor].fillna(0.0) * weight for factor, weight in zip(factors, weights, strict=True))
+                    score_frames.append(pd.DataFrame({"date": date, "code": day["code"], "method": method, "factor_score": factor_score}))
                 for factor, weight in zip(factors, weights, strict=True):
                     base_factor = factor.removesuffix("_neutralized")
                     weight_records.append(
@@ -380,7 +489,9 @@ class FactorCombinationResearch:
                         }
                     )
         return (
-            pd.concat(score_frames, ignore_index=True),
+            pd.concat(score_frames, ignore_index=True)
+            if score_frames
+            else pd.DataFrame(columns=["date", "code", "method", "factor_score"]),
             pd.DataFrame(weight_records, columns=["date", "method", "factor", "weight", "IC", "stability"]),
         )
 
@@ -402,11 +513,22 @@ class FactorCombinationResearch:
         return _normalize_weights(coefficients[1:])
 
     @staticmethod
-    def _ml_weights(history: pd.DataFrame, factors: Sequence[str], target: str) -> np.ndarray:
+    def _ml_weights(
+        history: pd.DataFrame,
+        factors: Sequence[str],
+        target: str,
+        max_samples: int = 20_000,
+        estimators: int = 20,
+    ) -> np.ndarray:
         clean = history.dropna(subset=[*factors, target])
         if len(clean) < max(100, len(factors) * 10):
             return np.repeat(1 / len(factors), len(factors))
-        model = RandomForestRegressor(n_estimators=50, random_state=0, min_samples_leaf=5)
+        if len(clean) > max_samples:
+            positions = np.linspace(0, len(clean) - 1, num=max_samples, dtype=int)
+            clean = clean.iloc[positions]
+        model = RandomForestRegressor(
+            n_estimators=estimators, random_state=0, min_samples_leaf=5, n_jobs=1
+        )
         model.fit(clean.loc[:, factors], clean[target])
         return _normalize_weights(model.feature_importances_)
 

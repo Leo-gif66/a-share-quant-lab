@@ -1,0 +1,29 @@
+method: combined
+factors:
+  momentum_5:
+    weight: 0.03607464973250958
+    direction: 1
+  momentum_20:
+    weight: 0.03347957798649957
+    direction: 1
+  momentum_60:
+    weight: 0.06125243716308796
+    direction: 1
+  trend_20:
+    weight: 0.016380126261322115
+    direction: 1
+  trend_60:
+    weight: 0.04097689084872343
+    direction: 1
+  volatility:
+    weight: 0.48976093281861355
+    direction: -1
+  liquidity:
+    weight: 0.0
+    direction: 1
+  turnover:
+    weight: 0.0
+    direction: 1
+  drawdown:
+    weight: 0.3220753851892438
+    direction: -1

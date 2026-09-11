@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from dataclasses import asdict
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import typer
+import yaml
 from rich import print
 
 from .backtest import BacktestEngine, run_backtest, score_panel
@@ -18,6 +22,7 @@ from .data.storage import Storage
 from .data.universe import Universe
 from .data.universe_builder import UniverseBuilder
 from .data.validator import DataValidator, ResearchDataValidator
+from .evolution import StrategyVersionStore
 from .demo import synthetic_prices
 from .factors.engine import FactorEngine
 from .factors.registry import names as factor_names
@@ -29,25 +34,38 @@ from .models import (
     prediction_ic_metrics,
     time_ordered_split,
 )
-from .paper import PaperAccount, PaperTradingEngine
+from .paper import PaperAccount, PaperTradingAccountV2, PaperTradingEngine, PaperTradingEngineV2
 from .portfolio import (
     IndustryNeutralPortfolioBacktestEngine,
     InstitutionalPortfolioBacktestEngine,
+    IntelligentPortfolioBacktestEngine,
     MLRankingPortfolioBacktestEngine,
     FactorProcessor,
+    PortfolioAllocator,
     PortfolioBacktestEngine,
+    CompositeScorer,
     compare_portfolio_results,
 )
 from .reporting import ResearchReportBuilder
+from .memory import TradeMemoryStore
+from .regime import MarketRegimeDetector
+from .pipeline import DailyResearchPipeline
 from .research import (
+    AdaptiveFactorWeightEngine,
     AnnualWalkForwardResearch,
     FactorCombinationResearch,
     FactorEvaluator,
     FactorResearchDataBuilder,
     ProfessionalFactorResearchPipeline,
     RESEARCH_FACTORS,
+    LiveSimulationEngine,
+    PredictionErrorAnalyzer,
+    StrategyDiagnosisEngine,
+    TradeAttributionEngine,
+    PerformanceAttributionEngine,
 )
 from .training import train_model
+from .validation import RobustnessTester, WalkForwardSettings, WalkForwardSimulator
 
 app=typer.Typer(help="Personal A-share Quant Lab")
 
@@ -63,6 +81,156 @@ class _StockSubset:
 
     def stocks(self) -> list[dict]:
         return self._stocks
+
+
+def _dataset_quality_table(panel: pd.DataFrame) -> pd.DataFrame:
+    """Compact dataset facts shared by the alpha and ML quality reports."""
+    dates = pd.to_datetime(panel["date"], errors="coerce") if "date" in panel else pd.Series()
+    return pd.DataFrame(
+        [
+            {"metric": "rows", "value": len(panel)},
+            {"metric": "stocks", "value": panel["code"].nunique() if "code" in panel else 0},
+            {"metric": "dates", "value": dates.nunique()},
+            {"metric": "first_date", "value": str(dates.min().date()) if dates.notna().any() else ""},
+            {"metric": "last_date", "value": str(dates.max().date()) if dates.notna().any() else ""},
+        ]
+    )
+
+
+def _metrics_quality_table(metrics: dict[str, object]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [{"metric": str(name), "value": value} for name, value in metrics.items()]
+    )
+
+
+def _saved_factor_reliability(path: Path) -> pd.DataFrame:
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+
+
+def _adaptive_weight_config(
+    factor_config_path: str | Path,
+    method: str,
+    output_path: str | Path = "configs/adaptive_factor_weights.yaml",
+) -> Path:
+    """Build a reproducible config from saved research evidence when present."""
+    processor = FactorProcessor.from_yaml(factor_config_path)
+    summary_path = Path("research/results/factor_research_summary.csv")
+    statistics = pd.read_csv(summary_path) if summary_path.exists() else None
+    result = AdaptiveFactorWeightEngine(processor.factor_specs).calculate(
+        method=method, factor_statistics=statistics, rolling_performance=statistics
+    )
+    return AdaptiveFactorWeightEngine(processor.factor_specs).save(result, output_path)
+
+
+def _paper_price_panel(raw_dir: Path, symbols: set[str], as_of: pd.Timestamp) -> pd.DataFrame:
+    """Load only bars on or before the paper decision date (no look-ahead)."""
+    frames: list[pd.DataFrame] = []
+    for symbol in sorted(symbols):
+        path = raw_dir / f"{str(symbol).zfill(6)}.parquet"
+        if not path.exists():
+            continue
+        frame = pd.read_parquet(path, columns=["date", "close"])
+        frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+        frame = frame.loc[frame["date"] <= as_of].copy()
+        if frame.empty:
+            continue
+        frame["symbol"] = str(symbol).zfill(6)
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["date", "symbol", "close"])
+
+
+def _validation_inputs(
+    root: Path, universe_path: str | Path, scores_path: str | Path = "data/features/composite_score.parquet"
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, str], pd.DataFrame]:
+    """Load the exact local snapshot used by v4 validation and perturbations."""
+    scores = pd.read_parquet(scores_path)
+    allowed_stocks = Universe(universe_path).stocks()
+    industries = {
+        str(stock["code"]).zfill(6): str(stock.get("industry") or stock.get("sector") or "Unknown")
+        for stock in allowed_stocks
+    }
+    scores["code"] = scores["code"].astype(str).str.zfill(6)
+    scores["date"] = pd.to_datetime(scores["date"], errors="raise").dt.normalize()
+    scores = scores.loc[scores["code"].isin(industries)].copy()
+    if scores.empty:
+        raise typer.BadParameter("no composite scores match the configured universe")
+    required_dates = set(scores["date"])
+    frames: list[pd.DataFrame] = []
+    for code in sorted(scores["code"].unique()):
+        path = root / "features" / f"{code}.parquet"
+        if not path.exists():
+            continue
+        frame = pd.read_parquet(path)
+        if not {"date", "open", "close"}.issubset(frame.columns):
+            continue
+        frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.normalize()
+        frame = frame.loc[frame["date"].isin(required_dates)].copy()
+        if frame.empty:
+            continue
+        frame["code"] = code
+        frames.append(frame)
+    if not frames:
+        raise typer.BadParameter("no feature price rows match the composite score history")
+    feature_panel = pd.concat(frames, ignore_index=True)
+    prices = feature_panel.loc[:, ["date", "code", "open", "close"]].copy()
+    benchmark_path = root / "raw" / "000300.parquet"
+    if not benchmark_path.exists():
+        raise typer.BadParameter("walk-forward requires data/raw/000300.parquet")
+    benchmark = pd.read_parquet(benchmark_path, columns=["date", "close"])
+    return scores, prices, benchmark, industries, feature_panel
+
+
+def _perturbed_scores(feature_panel: pd.DataFrame, factor_config_path: str | Path, perturbation: float) -> pd.DataFrame:
+    """Recompute composite scores after a real, normalized factor-weight shift."""
+    processor = FactorProcessor.from_yaml(factor_config_path)
+    names = list(processor.factor_specs)
+    if not names:
+        raise ValueError("factor perturbation requires configured factors")
+    target = names[0]
+    original = {name: spec.weight for name, spec in processor.factor_specs.items()}
+    adjusted_target = float(min(1.0, max(0.0, original[target] + perturbation)))
+    remainder = 1.0 - adjusted_target
+    other_total = sum(weight for name, weight in original.items() if name != target)
+    adjusted = {
+        name: adjusted_target if name == target else (weight / other_total * remainder if other_total > 0 else 0.0)
+        for name, weight in original.items()
+    }
+    specs = {name: replace(spec, weight=float(adjusted[name])) for name, spec in processor.factor_specs.items()}
+    return CompositeScorer(FactorProcessor(specs)).score(feature_panel)
+
+
+def _local_validation_benchmarks(root: Path) -> dict[str, pd.DataFrame | None]:
+    paths = {"CSI500": root / "raw" / "000905.parquet", "CSI1000": root / "raw" / "000852.parquet"}
+    return {name: pd.read_parquet(path, columns=["date", "close"]) if path.exists() else None for name, path in paths.items()}
+
+
+def _institutional_dashboard(
+    walk_results: pd.DataFrame | None = None,
+    attribution: pd.DataFrame | None = None,
+    robustness: pd.DataFrame | None = None,
+) -> Path:
+    """Build one dashboard from current evidence without assuming each artefact exists."""
+    history = StrategyVersionStore().history()
+    validation_root = Path("data/validation")
+    if walk_results is None:
+        walk_path = validation_root / "walk_forward_results.parquet"
+        walk_results = pd.read_parquet(walk_path) if walk_path.exists() else pd.DataFrame()
+    if attribution is None:
+        attribution_path = validation_root / "performance_attribution.parquet"
+        attribution = pd.read_parquet(attribution_path) if attribution_path.exists() else pd.DataFrame()
+    if robustness is None:
+        robustness_path = validation_root / "robustness_results.parquet"
+        robustness = pd.read_parquet(robustness_path) if robustness_path.exists() else pd.DataFrame()
+    paper_path = Path("data/paper/performance.parquet")
+    paper = pd.read_parquet(paper_path) if paper_path.exists() else pd.DataFrame()
+    sections = {
+        "Walk-forward": walk_results,
+        "Performance attribution": attribution,
+        "Robustness": robustness,
+        "Strategy history": history,
+        "Paper trading": paper,
+    }
+    return ResearchReportBuilder().build_institutional_dashboard(sections)
 
 
 @app.command("doctor")
@@ -448,6 +616,329 @@ def institutional_backtest(base: str = "configs/base.yaml", override: str | None
     print(result.holdings_history.tail(30).to_string(index=False))
 
 
+@app.command("regime-check")
+def regime_check(base: str = "configs/base.yaml", override: str | None = None):
+    """Classify the latest local CSI 300 state using trend, breadth, and volatility."""
+    c = cfg(base, override)
+    raw_dir = Path(c["data"]["storage_root"]) / "raw"
+    benchmark = pd.read_parquet(raw_dir / "000300.parquet")
+    detector = MarketRegimeDetector()
+    breadth = detector.market_breadth(raw_dir, benchmark["date"].max())
+    snapshot = detector.detect(benchmark, breadth)
+    print("[bold]Market regime[/bold]")
+    print(json.dumps({key: str(value) if key == "date" else value for key, value in asdict(snapshot).items()}, indent=2))
+
+
+@app.command("intelligent-backtest")
+def intelligent_backtest(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    adaptive_method: str = "icir",
+    factor_config_path: str = "configs/factor_weights.yaml",
+    memory_path: str = "data/memory/trades.parquet",
+):
+    """Run v3 adaptive scoring, market regimes, institutional construction, and memory."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    adaptive_path = _adaptive_weight_config(factor_config_path, adaptive_method)
+    result = IntelligentPortfolioBacktestEngine(
+        features_dir=root / "features",
+        raw_dir=root / "raw",
+        factor_config_path=adaptive_path,
+        memory_path=memory_path,
+    ).run()
+    benchmark = pd.read_parquet(root / "raw" / "000300.parquet")
+    review = TradeAttributionEngine().review_store(TradeMemoryStore(memory_path), benchmark)
+    report = ResearchReportBuilder().build_strategy_review(
+        review.factor_contribution,
+        review.summary,
+        review.industry_contribution,
+        review.drawdown_analysis,
+        review.monthly_summary,
+    )
+    print("[bold]Intelligent Portfolio Performance Report[/bold]")
+    print(json.dumps(result.metrics, indent=2))
+    print(f"Adaptive factor weights: {adaptive_path}")
+    print(f"Trade memory: {result.memory_path}")
+    print(f"Strategy review: {report}")
+    print("[bold]Latest regimes[/bold]")
+    print(result.regime_history.tail(20).to_string(index=False))
+
+
+@app.command("trade-review")
+def trade_review(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    memory_path: str = "data/memory/trades.parquet",
+):
+    """Review realized decisions in trade memory and generate the strategy review."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    benchmark_path = root / "raw" / "000300.parquet"
+    benchmark = pd.read_parquet(benchmark_path) if benchmark_path.exists() else None
+    review = TradeAttributionEngine().review_store(TradeMemoryStore(memory_path), benchmark)
+    report = ResearchReportBuilder().build_strategy_review(
+        review.factor_contribution,
+        review.summary,
+        review.industry_contribution,
+        review.drawdown_analysis,
+        review.monthly_summary,
+    )
+    print("[bold]Trade review[/bold]")
+    print(review.summary.to_string(index=False))
+    print(f"Strategy review: {report}")
+
+
+@app.command("strategy-diagnosis")
+def strategy_diagnosis(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    memory_path: str = "data/memory/trades.parquet",
+    factor_config_path: str = "configs/factor_weights.yaml",
+):
+    """Diagnose completed trade errors and write learned factor weights."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    store = TradeMemoryStore(memory_path)
+    analysis = PredictionErrorAnalyzer().analyze(store.load())
+    diagnosis = StrategyDiagnosisEngine().diagnose(analysis.trades, analysis)
+    report = ResearchReportBuilder().build_strategy_diagnosis(
+        diagnosis.best_conditions,
+        diagnosis.worst_conditions,
+        diagnosis.factor_failures,
+        diagnosis.prediction_biases,
+        diagnosis.recommendations,
+    )
+    benchmark_path = root / "raw" / "000300.parquet"
+    benchmark = pd.read_parquet(benchmark_path) if benchmark_path.exists() else None
+    contribution = TradeAttributionEngine().review_store(store, benchmark).factor_contribution
+    processor = FactorProcessor.from_yaml(factor_config_path)
+    statistics_path = Path("research/results/factor_research_summary.csv")
+    statistics = pd.read_csv(statistics_path) if statistics_path.exists() else None
+    learned = AdaptiveFactorWeightEngine(processor.factor_specs).calculate(
+        "combined", factor_statistics=statistics, realized_contribution=contribution
+    )
+    learned_path = AdaptiveFactorWeightEngine(processor.factor_specs).save(
+        learned, "configs/learned_factor_weights.yaml"
+    )
+    version = StrategyVersionStore().record_if_changed(
+        learned.weights,
+        reason="Strategy diagnosis combined IC, ICIR, and realized contribution evidence.",
+        performance_before={},
+        performance_after={},
+    )
+    print("[bold]Strategy diagnosis[/bold]")
+    print(diagnosis.recommendations.to_string(index=False))
+    print(f"Error analysis: data/memory/error_analysis.parquet")
+    print(f"Diagnosis report: {report}")
+    print(f"Learned factor weights: {learned_path}")
+    if version.changed:
+        print(f"Strategy version: {version.path}")
+
+
+@app.command("live-simulation")
+def live_simulation(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    scores_path: str = "data/features/composite_score.parquet",
+    memory_path: str = "data/memory/trades.parquet",
+):
+    """Run a time-ordered score calibration simulation and update decision memory."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    scores = pd.read_parquet(scores_path)
+    codes = set(scores["code"].astype(str).str.zfill(6))
+    price_frames: list[pd.DataFrame] = []
+    for code in sorted(codes):
+        path = root / "raw" / f"{code}.parquet"
+        if not path.exists():
+            continue
+        prices = pd.read_parquet(path, columns=["date", "open"])
+        prices["code"] = code
+        price_frames.append(prices)
+    if not price_frames:
+        raise typer.BadParameter("no raw open prices matched the score universe")
+    price_panel = pd.concat(price_frames, ignore_index=True)
+    industries = {
+        str(stock["code"]).zfill(6): str(stock.get("industry") or stock.get("sector") or "Unknown")
+        for stock in Universe(c["data"].get("universe_path", "configs/universe_large.yaml")).stocks()
+    }
+    benchmark = pd.read_parquet(root / "raw" / "000300.parquet")
+    detector = MarketRegimeDetector()
+
+    def regime_at(date: pd.Timestamp) -> tuple[str, float, float]:
+        snapshot = detector.detect(benchmark, as_of=date)
+        return snapshot.state, snapshot.exposure, snapshot.volatility
+
+    result = LiveSimulationEngine().run(
+        scores,
+        price_panel,
+        memory=TradeMemoryStore(memory_path),
+        industries=industries,
+        regime_provider=regime_at,
+    )
+    print("[bold]Live simulation[/bold]")
+    print(f"Portfolio snapshots: {result.output_path}")
+    print(f"Simulated decisions: {len(result.snapshots)}")
+    print(f"Trade memory rows: {len(result.trades)}")
+
+
+@app.command("walk-forward")
+def walk_forward(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    scores_path: str = "data/features/composite_score.parquet",
+    train_window: int = 40,
+    validation_window: int = 20,
+    rebalance_frequency: int = 10,
+    retrain_frequency: int = 1,
+    memory_path: str = "data/validation/walk_forward_trades.parquet",
+):
+    """Run leakage-safe rolling training and portfolio validation on local data."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    try:
+        scores, prices, benchmark, industries, _ = _validation_inputs(
+            root, c["data"].get("universe_path", "configs/universe_large.yaml"), scores_path
+        )
+        settings = WalkForwardSettings(
+            train_window=train_window,
+            validation_window=validation_window,
+            rebalance_frequency=rebalance_frequency,
+            retrain_frequency=retrain_frequency,
+        )
+        result = WalkForwardSimulator(settings).run(
+            scores,
+            prices,
+            benchmark,
+            industries=industries,
+            memory=TradeMemoryStore(memory_path),
+            benchmarks=_local_validation_benchmarks(root),
+        )
+    except Exception as exc:  # noqa: BLE001 - preserve old commands and show a concise validation failure
+        print(f"[red]FAILED[/red] {str(exc) or exc.__class__.__name__}")
+        raise typer.Exit(code=1) from exc
+    report = ResearchReportBuilder().build_walk_forward(
+        result.metrics, result.results, result.benchmark_comparison
+    )
+    attribution = PerformanceAttributionEngine().decompose(
+        result.results.loc[:, ["date", "equity"]],
+        result.results.loc[:, ["date", "benchmark"]],
+        result.holdings,
+        prices,
+    )
+    attribution_report = ResearchReportBuilder().build_performance_attribution(
+        attribution.summary, attribution.daily
+    )
+    attribution_path = root / "validation" / "performance_attribution.parquet"
+    attribution_path.parent.mkdir(parents=True, exist_ok=True)
+    attribution.summary.to_parquet(attribution_path, index=False)
+    dashboard = _institutional_dashboard(result.results, attribution.summary)
+    print("[bold]Walk-forward validation[/bold]")
+    print(json.dumps(result.metrics, indent=2, default=str))
+    print(result.benchmark_comparison.to_string(index=False))
+    print(f"Results: {result.output_path}")
+    print(f"Trade memory: {result.memory_path}")
+    print(f"Walk-forward report: {report}")
+    print(f"Performance attribution: {attribution_report}")
+    print(f"Institutional dashboard: {dashboard}")
+
+
+@app.command("strategy-history")
+def strategy_history(
+    factor_config_path: str = "configs/evolved_factor_weights.yaml",
+):
+    """List immutable factor-weight versions and render their governance record."""
+    store = StrategyVersionStore()
+    if store.history().empty:
+        source = Path(factor_config_path)
+        if not source.exists():
+            source = Path("configs/factor_weights.yaml")
+        with source.open(encoding="utf-8") as stream:
+            payload = yaml.safe_load(stream)
+        store.record_if_changed(payload, reason="Baseline strategy configuration imported for v4 governance.")
+    history = store.history()
+    report = ResearchReportBuilder().build_strategy_history(history)
+    dashboard = _institutional_dashboard()
+    print("[bold]Strategy version history[/bold]")
+    print(history.to_string(index=False))
+    print(f"Strategy history report: {report}")
+    print(f"Institutional dashboard: {dashboard}")
+
+
+@app.command("robustness")
+def robustness(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    scores_path: str = "data/features/composite_score.parquet",
+    factor_config_path: str = "configs/factor_weights.yaml",
+):
+    """Measure rebalance, cost, weight, and universe sensitivity with real replays."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    try:
+        scores, prices, benchmark, industries, feature_panel = _validation_inputs(
+            root, c["data"].get("universe_path", "configs/universe_large.yaml"), scores_path
+        )
+        base_settings = WalkForwardSettings()
+        scenario_number = 0
+
+        def runner(parameters: dict[str, float | int]) -> dict[str, float]:
+            nonlocal scenario_number
+            scenario_number += 1
+            scenario_scores = scores
+            settings = base_settings
+            if "factor_weight_perturbation" in parameters:
+                scenario_scores = _perturbed_scores(
+                    feature_panel, factor_config_path, float(parameters["factor_weight_perturbation"])
+                )
+            if "universe_fraction" in parameters:
+                codes = sorted(scenario_scores["code"].astype(str).str.zfill(6).unique())
+                keep_count = max(5, int(len(codes) * float(parameters["universe_fraction"])))
+                # Evenly spaced deterministic removal is reproducible and does
+                # not use return information to choose the reduced universe.
+                keep = {codes[index] for index in np.linspace(0, len(codes) - 1, keep_count, dtype=int)}
+                scenario_scores = scenario_scores.loc[scenario_scores["code"].astype(str).str.zfill(6).isin(keep)]
+                scenario_prices = prices.loc[prices["code"].astype(str).str.zfill(6).isin(keep)]
+                scenario_industries = {code: industry for code, industry in industries.items() if code in keep}
+            else:
+                scenario_prices = prices
+                scenario_industries = industries
+            if "rebalance_frequency" in parameters:
+                settings = replace(settings, rebalance_frequency=int(parameters["rebalance_frequency"]))
+            if "transaction_cost_multiplier" in parameters:
+                multiplier = float(parameters["transaction_cost_multiplier"])
+                settings = replace(
+                    settings,
+                    commission=settings.commission * multiplier,
+                    stamp_tax=settings.stamp_tax * multiplier,
+                    slippage=settings.slippage * multiplier,
+                )
+            result = WalkForwardSimulator(settings).run(
+                scenario_scores,
+                scenario_prices,
+                benchmark,
+                industries=scenario_industries,
+                memory=TradeMemoryStore(root / "validation" / "robustness_trades.parquet"),
+                output_path=root / "validation" / f"robustness_{scenario_number:02d}.parquet",
+            )
+            return result.metrics
+
+        results = RobustnessTester().run(runner)
+    except Exception as exc:  # noqa: BLE001 - infrastructure failures, unlike scenario failures, stop the command
+        print(f"[red]FAILED[/red] {str(exc) or exc.__class__.__name__}")
+        raise typer.Exit(code=1) from exc
+    report = ResearchReportBuilder().build_robustness(results)
+    robustness_path = root / "validation" / "robustness_results.parquet"
+    robustness_path.parent.mkdir(parents=True, exist_ok=True)
+    results.to_parquet(robustness_path, index=False)
+    dashboard = _institutional_dashboard(robustness=results)
+    print("[bold]Robustness validation[/bold]")
+    print(results.to_string(index=False))
+    print(f"Robustness report: {report}")
+    print(f"Institutional dashboard: {dashboard}")
+
+
 @app.command("paper-start")
 def paper_start(scores_path: str = "data/features/composite_score.parquet", state_path: str = "data/paper/account.json"):
     """Create pending paper orders for the business day after the latest score date."""
@@ -461,6 +952,88 @@ def paper_start(scores_path: str = "data/features/composite_score.parquet", stat
         return
     print(f"Planned {len(orders)} paper orders for {orders[0].execution_date.date()}")
     print(f"Paper-account state saved to {saved}")
+
+
+@app.command("daily-run")
+def daily_run(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    factor_config_path: str = "configs/factor_weights.yaml",
+    memory_path: str = "data/memory/trades.parquet",
+):
+    """Run the local-first v3.8 daily research and portfolio-decision pipeline."""
+    c = cfg(base, override)
+    pipeline = DailyResearchPipeline(
+        data_root=c["data"]["storage_root"],
+        universe_path=c["data"].get("universe_path", "configs/universe_large.yaml"),
+        factor_config_path=factor_config_path,
+        memory_path=memory_path,
+    )
+    try:
+        result = pipeline.run()
+    except Exception as exc:  # noqa: BLE001 - print an actionable single command failure
+        print(f"[red]FAILED[/red] {str(exc) or exc.__class__.__name__}")
+        raise typer.Exit(code=1) from exc
+    print("[bold]Daily research pipeline[/bold]")
+    print(result.stages.to_string(index=False))
+    print(f"Candidates: {result.candidates_path}")
+    print(f"Daily alpha report: {result.report_path}")
+    if result.evolved_weights_path is not None:
+        print(f"Evolved factor weights: {result.evolved_weights_path}")
+
+
+@app.command("paper-run")
+def paper_run(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    candidates_path: str = "data/features/daily_candidates.parquet",
+    state_path: str = "data/paper/v2_account.json",
+    output_dir: str = "data/paper",
+):
+    """Execute one constrained v2 paper rebalance from daily candidates."""
+    c = cfg(base, override)
+    source = Path(candidates_path)
+    if not source.exists():
+        print(f"[red]FAILED[/red] daily candidates not found: {source}; run `quant daily-run` first")
+        raise typer.Exit(code=1)
+    candidates = pd.read_parquet(source)
+    if candidates.empty:
+        print("No candidates available; paper account was not changed.")
+        return
+    as_of = pd.to_datetime(candidates["date"], errors="raise").max().normalize()
+    allocation = PortfolioAllocator().allocate(candidates, as_of=as_of)
+    existing = PaperTradingAccountV2.load(state_path)
+    symbols = set(allocation.holdings.get("symbol", pd.Series(dtype=str)).astype(str)) | set(existing.positions)
+    prices = _paper_price_panel(Path(c["data"]["storage_root"]) / "raw", symbols, as_of)
+    if prices.empty:
+        print("[red]FAILED[/red] no local prices are available on or before the candidate date")
+        raise typer.Exit(code=1)
+    try:
+        result = PaperTradingEngineV2().run(
+            allocation.holdings,
+            prices,
+            state_path=state_path,
+            output_dir=output_dir,
+            as_of=as_of,
+        )
+    except Exception as exc:  # noqa: BLE001 - preserve the prior persistent account on failure
+        print(f"[red]FAILED[/red] {str(exc) or exc.__class__.__name__}")
+        raise typer.Exit(code=1) from exc
+    positions = pd.DataFrame(
+        [{"symbol": symbol, "quantity": quantity} for symbol, quantity in sorted(result.account.positions.items())]
+    )
+    report = ResearchReportBuilder().build_paper_performance(
+        result.performance,
+        result.fills,
+        positions,
+    )
+    print("[bold]Paper trading v2[/bold]")
+    print(result.performance.to_string(index=False))
+    if result.already_processed:
+        print(f"Already processed for {as_of.date()}; no duplicate fills. cash: {result.account.cash:.2f}")
+    else:
+        print(f"Fills: {len(result.fills)}; cash: {result.account.cash:.2f}")
+    print(f"Paper performance report: {report}")
 
 
 @app.command("ml-train")
@@ -489,8 +1062,23 @@ def ml_train(
     metrics = prediction_ic_metrics(
         split.test, model.predict(split.test), "future_excess_return_20d"
     )
+    metrics.update(
+        {
+            "training_rows": int(len(split.train)),
+            "validation_rows": int(len(split.validation)),
+            "test_rows": int(len(split.test)),
+            **model.ranking_label_info,
+        }
+    )
     (output / f"{model_name}_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    quality_report = ResearchReportBuilder().build_research_quality(
+        _dataset_quality_table(normalized),
+        processor.last_coverage,
+        _saved_factor_reliability(Path("research/results/factor_research_summary.csv")),
+        _metrics_quality_table(metrics),
+    )
     print(f"Model saved: {model_path}")
+    print(f"Research quality report: {quality_report}")
     print(json.dumps(metrics, indent=2))
     print(importance.to_string(index=False))
 
@@ -514,7 +1102,9 @@ def alpha_research(
         print(f"[red]FAILED[/red] {exc}")
         raise typer.Exit(code=1) from exc
     neutral_factors = [f"{factor}_neutralized" for factor in RESEARCH_FACTORS]
-    _scores, weights = FactorCombinationResearch().compare(result.neutralized_panel, neutral_factors, result)
+    _scores, weights = FactorCombinationResearch().compare(
+        result.neutralized_panel, neutral_factors, result, collect_scores=False
+    )
     directory = Path(output_dir)
     weights.to_csv(directory / "factor_weights_report.csv", index=False)
     walk_forward = AnnualWalkForwardResearch().run(
@@ -531,10 +1121,21 @@ def alpha_research(
         walk_forward,
         comparison,
     )
+    quality_report = ResearchReportBuilder().build_research_quality(
+        _dataset_quality_table(result.neutralized_panel),
+        result.factor_coverage,
+        result.summary,
+        _metrics_quality_table(
+            json.loads(Path("models/lightgbm_metrics.json").read_text(encoding="utf-8"))
+            if Path("models/lightgbm_metrics.json").exists()
+            else {}
+        ),
+    )
     print(f"Factor summary: {directory / 'factor_research_summary.csv'}")
     print(f"Factor weights: {directory / 'factor_weights_report.csv'}")
     print(f"Walk-forward report: {directory / 'walk_forward_report.csv'}")
     print(f"Alpha research report: {report}")
+    print(f"Research quality report: {quality_report}")
     print(result.summary.sort_values("ICIR", ascending=False).to_string(index=False))
 
 

@@ -9,6 +9,8 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+from ..research.preprocessing import ResearchPreprocessor
+
 
 @dataclass(frozen=True)
 class FactorSpec:
@@ -105,6 +107,8 @@ class FactorProcessor:
             raise ValueError("sigma must be positive")
         self.factor_specs = dict(factor_specs)
         self.sigma = sigma
+        self.preprocessor = ResearchPreprocessor(sigma=sigma)
+        self.last_coverage = pd.DataFrame(columns=ResearchPreprocessor.COVERAGE_COLUMNS)
 
     @classmethod
     def from_yaml(cls, path: str | Path = "configs/factor_weights.yaml", sigma: float = 3.0):
@@ -129,12 +133,13 @@ class FactorProcessor:
         return result
 
     def process(self, panel: pd.DataFrame) -> pd.DataFrame:
-        """Winsorize and z-score all configured factors by rebalance date."""
+        """Validate, clean, winsorize, and z-score factors by rebalance date."""
         if not {"date", "code"}.issubset(panel.columns):
             raise ValueError("factor panel requires date and code columns")
         aligned = self.align_factor_columns(panel)
-        clipped = winsorize(aligned, self.factor_names, sigma=self.sigma)
-        return standardize(clipped, self.factor_names)
+        cleaned = self.preprocessor.process(aligned, self.factor_names)
+        self.last_coverage = cleaned.coverage
+        return standardize(cleaned.data, self.factor_names)
 
     @staticmethod
     def _source_column(panel: pd.DataFrame, factor: str) -> str | None:

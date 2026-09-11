@@ -1,0 +1,34 @@
+version: v001
+timestamp: '2026-09-11T18:17:46.554948+00:00'
+reason: Daily adaptive factor-weight update from completed-trade and factor research
+  evidence.
+performance_before: {}
+performance_after: {}
+factors:
+  drawdown:
+    weight: 0.25
+    direction: -1
+  liquidity:
+    weight: 0.03491919353508126
+    direction: 1
+  momentum_20:
+    weight: 0.07224463694538508
+    direction: 1
+  momentum_5:
+    weight: 0.0742355899411528
+    direction: 1
+  momentum_60:
+    weight: 0.1465589247134417
+    direction: 1
+  trend_20:
+    weight: 0.05912584564777597
+    direction: 1
+  trend_60:
+    weight: 0.07799661568208195
+    direction: 1
+  turnover:
+    weight: 0.03491919353508126
+    direction: 1
+  volatility:
+    weight: 0.25
+    direction: -1

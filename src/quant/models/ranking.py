@@ -12,6 +12,8 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 
+from ..research.preprocessing import ResearchPreprocessor
+
 
 ModelName = Literal["lightgbm", "random_forest", "linear", "xgboost"]
 
@@ -21,6 +23,60 @@ class TimeSplit:
     train: pd.DataFrame
     validation: pd.DataFrame
     test: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class RankingLabelEncoding:
+    """Per-date integer relevance labels accepted by LightGBM LambdaRank."""
+
+    labels: pd.Series
+    groups: list[int]
+    number_of_classes: int
+
+
+def encode_ranking_labels(
+    data: pd.DataFrame, label: str, date_column: str = "date"
+) -> RankingLabelEncoding:
+    """Encode each training-date cross-section as ``0 .. group_size - 1``.
+
+    Ranking relevance is calculated independently for each date.  That makes
+    a target's encoding depend only on its contemporaneous cross-section, not
+    observations from later windows, and avoids LightGBM's invalid sparse or
+    oversized label-mapping values.
+    """
+    if date_column not in data or label not in data:
+        raise ValueError("ranking labels require date and target columns")
+    frame = data.loc[:, [date_column, label]].copy()
+    frame[date_column] = pd.to_datetime(frame[date_column], errors="raise")
+    frame[label] = pd.to_numeric(frame[label], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    if frame[label].isna().any():
+        raise ValueError("ranking labels require finite target values")
+
+    labels = pd.Series(index=frame.index, dtype="int64")
+    groups: list[int] = []
+    for _, group in frame.groupby(date_column, sort=True):
+        relevance = group[label].rank(method="first", ascending=True).astype("int64") - 1
+        labels.loc[group.index] = relevance
+        groups.append(len(group))
+    number_of_classes = max(groups, default=0)
+    validate_ranking_labels(labels, groups, number_of_classes)
+    return RankingLabelEncoding(labels.astype("int32"), groups, number_of_classes)
+
+
+def validate_ranking_labels(
+    labels: pd.Series | np.ndarray, groups: Sequence[int], number_of_classes: int
+) -> None:
+    """Assert the LambdaRank relevance contract before a model is fitted."""
+    values = np.asarray(labels, dtype=np.int64)
+    if number_of_classes < 1 or len(values) != sum(groups):
+        raise ValueError("ranking labels and groups are inconsistent")
+    assert values.min() >= 0
+    assert values.max() < number_of_classes
+    offset = 0
+    for size in groups:
+        group = np.sort(values[offset : offset + size])
+        assert np.array_equal(group, np.arange(size))
+        offset += size
 
 
 def time_ordered_split(
@@ -92,31 +148,38 @@ class RankingModel:
         self.params = dict(params or {})
         self.model: object | None = None
         self.feature_names: list[str] = []
+        self.preprocessor = ResearchPreprocessor()
+        self.ranking_label_info: dict[str, int] = {}
 
     def fit(self, data: pd.DataFrame, features: Sequence[str], label: str) -> "RankingModel":
         required = {"date", label, *features}
         if not required.issubset(data.columns):
             raise ValueError(f"ranking data missing columns: {', '.join(sorted(required.difference(data.columns)))}")
-        frame = data.loc[:, ["date", *features, label]].copy().dropna()
+        cleaned = self.preprocessor.process(data, features, target_columns=(label,))
+        frame = cleaned.data.loc[:, ["date", *features, label]].copy().dropna()
         frame["date"] = pd.to_datetime(frame["date"], errors="raise")
         frame = frame.sort_values("date", kind="stable")
         if frame.empty or frame["date"].nunique() < 2:
             raise ValueError("ranking training requires at least two non-empty dates")
         self.feature_names = list(features)
         X, y = frame[self.feature_names], pd.to_numeric(frame[label], errors="raise")
+        ResearchPreprocessor.assert_finite(frame, [*features, label])
         if self.model_name == "lightgbm":
             from lightgbm import LGBMRanker
 
             parameters = {"objective": "lambdarank", "random_state": 0, **self.params}
+            encoding = encode_ranking_labels(frame, label)
+            # LightGBM's default label-gain mapping has only 31 entries.  A
+            # complete per-date rank can be wider, so use a linear mapping
+            # whose size is exactly the validated relevance class range.
+            parameters["label_gain"] = list(range(encoding.number_of_classes))
             model = LGBMRanker(**parameters)
-            # LambdaRank requires integer relevance labels.  Cross-sectional
-            # ranks preserve the target ordering without treating a continuous
-            # return as an arbitrary relevance gain.
-            relevance = (
-                frame.groupby("date")[label].rank(method="first").astype(int).sub(1).to_numpy()
-            )
-            groups = frame.groupby("date", sort=True).size().to_list()
-            model.fit(X, relevance, group=groups)
+            model.fit(X, encoding.labels.to_numpy(), group=encoding.groups)
+            self.ranking_label_info = {
+                "minimum_label": int(encoding.labels.min()),
+                "maximum_label": int(encoding.labels.max()),
+                "number_of_classes": encoding.number_of_classes,
+            }
         elif self.model_name == "random_forest":
             parameters = {"random_state": 0, "n_estimators": 100, **self.params}
             model = RandomForestRegressor(**parameters)
@@ -140,7 +203,12 @@ class RankingModel:
             raise RuntimeError("ranking model must be fitted before prediction")
         if not set(self.feature_names).issubset(data.columns):
             raise ValueError("prediction data is missing fitted feature columns")
-        return pd.Series(self.model.predict(data[self.feature_names]), index=data.index, name="prediction")  # type: ignore[union-attr]
+        cleaned = self.preprocessor.process(data, self.feature_names).data
+        valid = cleaned.loc[:, self.feature_names].notna().all(axis=1)
+        prediction = pd.Series(np.nan, index=data.index, name="prediction", dtype="float64")
+        if valid.any():
+            prediction.loc[valid] = self.model.predict(cleaned.loc[valid, self.feature_names])  # type: ignore[union-attr]
+        return prediction
 
     def feature_importance(self) -> pd.DataFrame:
         if self.model is None:
@@ -178,8 +246,10 @@ def prediction_ic_metrics(
     values = data.loc[:, ["date", label]].copy()
     values["prediction"] = prediction.reindex(data.index)
     values["date"] = pd.to_datetime(values["date"], errors="raise")
-    values[label] = pd.to_numeric(values[label], errors="coerce")
-    values["prediction"] = pd.to_numeric(values["prediction"], errors="coerce")
+    values[label] = pd.to_numeric(values[label], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    values["prediction"] = pd.to_numeric(values["prediction"], errors="coerce").replace(
+        [np.inf, -np.inf], np.nan
+    )
     pearson: list[float] = []
     spearman: list[float] = []
     for _, group in values.groupby("date", sort=True):
