@@ -14,20 +14,28 @@ class FactorEngine:
     """Build v0.5 factors from raw daily-price parquet files."""
 
     FACTOR_COLUMNS: ClassVar[tuple[str, ...]] = (
+        "momentum_5",
         "momentum_20",
+        "momentum_60",
+        "trend_20",
         "trend_60",
         "volatility_20",
         "liquidity_20",
         "volume_ratio_20",
+        "turnover_20",
         "drawdown_60",
     )
-    _REQUIRED_COLUMNS: ClassVar[tuple[str, ...]] = ("date", "close", "amount", "volume")
+    _REQUIRED_COLUMNS: ClassVar[tuple[str, ...]] = ("date", "close", "amount", "volume", "turnover")
     _SCORE_DIRECTIONS: ClassVar[dict[str, int]] = {
+        "momentum_5": 1,
         "momentum_20": 1,
+        "momentum_60": 1,
+        "trend_20": 1,
         "trend_60": 1,
         "volatility_20": -1,
         "liquidity_20": 1,
         "volume_ratio_20": 1,
+        "turnover_20": 1,
         "drawdown_60": 1,
     }
 
@@ -73,13 +81,18 @@ class FactorEngine:
         close = pd.to_numeric(result["close"], errors="coerce")
         volume = pd.to_numeric(result["volume"], errors="coerce")
         amount = pd.to_numeric(result["amount"], errors="coerce")
+        turnover = pd.to_numeric(result["turnover"], errors="coerce")
         daily_return = close.pct_change()
 
+        result["momentum_5"] = close.pct_change(5)
         result["momentum_20"] = close.pct_change(20)
+        result["momentum_60"] = close.pct_change(60)
+        result["trend_20"] = close / close.rolling(20).mean() - 1
         result["trend_60"] = close / close.rolling(60).mean() - 1
         result["volatility_20"] = daily_return.rolling(20).std()
         result["liquidity_20"] = amount.rolling(20).mean()
         result["volume_ratio_20"] = volume / volume.rolling(20).mean()
+        result["turnover_20"] = turnover.rolling(20).mean()
         result["drawdown_60"] = close / close.rolling(60).max() - 1
         return result
 

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
 from pathlib import Path
 
 import yaml
@@ -21,7 +22,7 @@ class Universe:
             raise TypeError("universe configuration must be a mapping")
         return data
 
-    def stocks(self) -> list[dict[str, str | None]]:
+    def stocks(self) -> list[dict[str, Any]]:
         """Return normalized stocks for v0.6 and the legacy grouped format.
 
         v0.6 uses a flat ``stocks`` list with ``market`` and ``sector``.  The
@@ -43,7 +44,7 @@ class Universe:
     @staticmethod
     def _normalize_stock(
         stock: object, legacy_category: str | None = None
-    ) -> dict[str, str | None]:
+    ) -> dict[str, Any]:
         if not isinstance(stock, Mapping):
             raise TypeError("every universe stock must be a mapping")
         if "code" not in stock or "name" not in stock:
@@ -55,13 +56,22 @@ class Universe:
         market = stock.get("market") or Universe._infer_market(code)
         # ``category`` is a compatibility alias for old consumers.  New code
         # should use ``sector``.
-        return {
+        normalized = {
             "code": code,
             "name": str(stock["name"]),
             "market": str(market).upper(),
             "sector": str(sector) if sector is not None else None,
             "category": str(category) if category is not None else None,
         }
+        if stock.get("index_source") is not None:
+            source = stock["index_source"]
+            if isinstance(source, Sequence) and not isinstance(source, (str, bytes)):
+                normalized["index_source"] = [str(item) for item in source]
+            else:
+                normalized["index_source"] = str(source)
+        if stock.get("industry") is not None:
+            normalized["industry"] = str(stock["industry"])
+        return normalized
 
     @staticmethod
     def _infer_market(code: str) -> str:

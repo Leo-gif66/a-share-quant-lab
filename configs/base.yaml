@@ -6,8 +6,9 @@ data:
   provider: akshare
   start_date: "20180101"
   universe_indexes: ["000300", "000905"]
-  benchmark_symbol: "csi000300"
+  benchmark_symbol: "000300"
   storage_root: "data"
+  universe_path: "configs/universe_large.yaml"
 
 features:
   enabled:

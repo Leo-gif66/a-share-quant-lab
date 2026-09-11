@@ -44,7 +44,10 @@ def test_factor_engine_builds_expected_factors(tmp_path: Path):
     expected = prices["close"].pct_change(20).iloc[-1]
 
     assert set(FactorEngine.FACTOR_COLUMNS).issubset(result.columns)
+    assert result["momentum_5"].iloc[-1] == prices["close"].pct_change(5).iloc[-1]
     assert result["momentum_20"].iloc[-1] == expected
+    assert result["momentum_60"].iloc[-1] == prices["close"].pct_change(60).iloc[-1]
+    assert result["trend_20"].iloc[-1] == prices["close"].iloc[-1] / prices["close"].iloc[-20:].mean() - 1
     assert result["trend_60"].iloc[-1] == prices["close"].iloc[-1] / prices["close"].iloc[-60:].mean() - 1
     assert result["volatility_20"].iloc[-1] == prices["close"].pct_change().rolling(20).std().iloc[-1]
     assert result["liquidity_20"].iloc[-1] == prices["amount"].iloc[-20:].mean()

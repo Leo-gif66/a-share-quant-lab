@@ -7,7 +7,7 @@ import pytest
 from quant.data.validator import DataValidator
 
 
-def valid_daily_data(days: int = 100) -> pd.DataFrame:
+def valid_daily_data(days: int = 501) -> pd.DataFrame:
     close = pd.Series(range(10, 10 + days), dtype=float)
     return pd.DataFrame(
         {
@@ -51,10 +51,21 @@ def test_validator_accepts_valid_parquet(tmp_path: Path):
         ),
         (lambda frame: frame.assign(close=np.nan), "close contains null or non-numeric values"),
         (lambda frame: frame.assign(volume=np.nan), "volume contains null or non-numeric values"),
-        (lambda frame: frame.iloc[:99].copy(), "only 99 rows; at least 100 trading days required"),
+        (lambda frame: frame.iloc[:500].copy(), "only 500 rows; at least 501 trading days required"),
     ],
 )
 def test_validator_rejects_invalid_daily_data(mutate, expected_error):
     errors = DataValidator().validate(mutate(valid_daily_data()))
 
     assert expected_error in errors
+
+
+def test_validator_checks_missing_rate_and_suspended_trading():
+    data = valid_daily_data(days=501)
+    data.loc[:30, "close"] = np.nan
+    data.loc[100:104, "volume"] = 0
+
+    errors = DataValidator().validate(data)
+
+    assert "close missing rate 6.19% exceeds 5.00%" in errors
+    assert "suspended trading detected: 5 consecutive zero-volume days" in errors

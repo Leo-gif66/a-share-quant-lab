@@ -1,0 +1,4 @@
+# Industry-neutral portfolio construction constraints.
+max_industry_weight: 0.25
+min_industry_count: 5
+max_stock_weight: 0.10

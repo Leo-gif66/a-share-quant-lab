@@ -1,0 +1,40 @@
+factors:
+  momentum_5:
+    weight: 0.10
+    direction: 1
+  momentum_20:
+    weight: 0.10
+    direction: 1
+  momentum_60:
+    weight: 0.20
+    direction: 1
+  trend_20:
+    weight: 0.10
+    direction: 1
+  trend_60:
+    weight: 0.10
+    direction: 1
+  volatility:
+    weight: 0.15
+    direction: -1
+  liquidity:
+    weight: 0.05
+    direction: 1
+  turnover:
+    weight: 0.05
+    direction: 1
+  drawdown:
+    weight: 0.15
+    direction: -1
+
+portfolio:
+  top_n: 20
+  rebalance_interval: 20
+
+risk:
+  benchmark_ma_window: 200
+  normal_exposure: 1.0
+  bear_exposure: 0.5
+  volatility_target: 0.20
+  volatility_lookback: 60
+  max_position: 0.10

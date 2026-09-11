@@ -12,8 +12,21 @@ class DataValidator:
 
     REQUIRED_COLUMNS = ("date", "open", "high", "low", "close", "volume")
 
-    def __init__(self, min_rows: int = 100) -> None:
+    def __init__(
+        self,
+        min_rows: int = 501,
+        max_missing_rate: float = 0.05,
+        suspension_days: int = 5,
+    ) -> None:
+        if min_rows < 1:
+            raise ValueError("min_rows must be positive")
+        if not 0 <= max_missing_rate <= 1:
+            raise ValueError("max_missing_rate must be between zero and one")
+        if suspension_days < 1:
+            raise ValueError("suspension_days must be positive")
         self.min_rows = min_rows
+        self.max_missing_rate = max_missing_rate
+        self.suspension_days = suspension_days
 
     def validate_parquet(self, path: str | Path) -> list[str]:
         """Read a parquet file and return every validation failure found."""
@@ -28,6 +41,13 @@ class DataValidator:
 
         if len(data) < self.min_rows:
             errors.append(f"only {len(data)} rows; at least {self.min_rows} trading days required")
+
+        missing_rates = self._missing_rates(data)
+        for column, rate in missing_rates.items():
+            if rate > self.max_missing_rate:
+                errors.append(
+                    f"{column} missing rate {rate:.2%} exceeds {self.max_missing_rate:.2%}"
+                )
 
         dates = pd.to_datetime(data["date"], errors="coerce")
         if dates.isna().any():
@@ -45,6 +65,9 @@ class DataValidator:
         volume = pd.to_numeric(data["volume"], errors="coerce")
         if volume.isna().any():
             errors.append("volume contains null or non-numeric values")
+        suspended_streak = self._longest_suspension_streak(volume)
+        if suspended_streak >= self.suspension_days:
+            errors.append(f"suspended trading detected: {suspended_streak} consecutive zero-volume days")
 
         prices = data.loc[:, ["open", "high", "low"]].apply(pd.to_numeric, errors="coerce")
         if prices.isna().any().any():
@@ -58,3 +81,20 @@ class DataValidator:
                 errors.append("low is above open or close")
 
         return errors
+
+    def _missing_rates(self, data: pd.DataFrame) -> dict[str, float]:
+        rates = {"date": float(pd.to_datetime(data["date"], errors="coerce").isna().mean())}
+        for column in ("open", "high", "low", "close", "volume"):
+            rates[column] = float(pd.to_numeric(data[column], errors="coerce").isna().mean())
+        return rates
+
+    @staticmethod
+    def _longest_suspension_streak(volume: pd.Series) -> int:
+        longest = current = 0
+        for value in volume:
+            if pd.notna(value) and value <= 0:
+                current += 1
+                longest = max(longest, current)
+            else:
+                current = 0
+        return longest

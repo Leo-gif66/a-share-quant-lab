@@ -30,13 +30,18 @@ class Storage:
         codes.update(p.stem for p in self.legacy_prices.glob("*.parquet"))
         return sorted(codes)
 
-    def write_benchmark(self, df: pd.DataFrame) -> Path:
-        path = self.raw / "index" / "benchmark.parquet"
+    def write_benchmark(self, df: pd.DataFrame, code: str = "000300") -> Path:
+        """Store a benchmark beside daily stock files under its market code."""
+        path = self.raw / f"{str(code).zfill(6)}.parquet"
         df.to_parquet(path, index=False)
         return path
 
-    def read_benchmark(self) -> pd.DataFrame:
-        return pd.read_parquet(self.raw / "index" / "benchmark.parquet")
+    def read_benchmark(self, code: str = "000300") -> pd.DataFrame:
+        """Read the direct benchmark file, retaining compatibility with v0.7."""
+        path = self.raw / f"{str(code).zfill(6)}.parquet"
+        if not path.exists() and str(code).zfill(6) == "000300":
+            path = self.raw / "index" / "benchmark.parquet"
+        return pd.read_parquet(path)
 
     def write_universe(self, df: pd.DataFrame) -> Path:
         path = self.raw / "universe.parquet"
@@ -55,6 +60,9 @@ class Storage:
         path = self.datasets / "training.parquet"
         df.to_parquet(path, index=False)
         return path
+
+    def read_dataset(self) -> pd.DataFrame:
+        return pd.read_parquet(self.datasets / "training.parquet")
 
     def query(self, sql: str):
         import duckdb
