@@ -245,7 +245,17 @@ class V5WalkForwardRunner:
 
     def _model_parameters(self) -> dict[str, object]:
         if self.settings.model == "random_forest":
-            return {"random_state": self.settings.seed, "n_estimators": 100, "n_jobs": 1}
+            # A bounded tree baseline makes all ten chronological folds
+            # reproducible on the local universe while explicitly reducing
+            # variance rather than silently abandoning the RF comparison.
+            return {
+                "random_state": self.settings.seed,
+                "n_estimators": 40,
+                "max_depth": 8,
+                "min_samples_leaf": 25,
+                "max_samples": 0.35,
+                "n_jobs": 1,
+            }
         if self.settings.model == "lightgbm":
             return {"random_state": self.settings.seed, "n_estimators": 100, "n_jobs": 1}
         return {}
