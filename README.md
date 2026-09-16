@@ -1,5 +1,10 @@
 # A-Share Quant Lab
 
+> **Current status:** v4.0 institutional-validation baseline  
+> **Universe:** 809 A-share stocks  
+> **Tests:** 119 passed  
+> **Research focus:** leakage-safe alpha research, portfolio construction, and strategy validation
+
 An extensible A-share quantitative research and trading-intelligence platform.
 
 ## Overview
