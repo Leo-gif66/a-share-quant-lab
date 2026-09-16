@@ -1,58 +1,58 @@
 """Tools for evaluating predictive factors and their portfolio contribution."""
 
-from .data import FactorResearchDataBuilder
-from .factor_evaluation import FactorEvaluator, factor_contribution_analysis
-from .optimization import ParameterOptimizer, factor_weight_candidates
-from .walk_forward import WalkForwardConfig, WalkForwardPeriod, WalkForwardValidator
-from .preprocessing import ResearchPreprocessResult, ResearchPreprocessor
-from .adaptive_weights import AdaptiveFactorWeightEngine, AdaptiveWeightResult, WEIGHT_METHODS
-from .attribution import TradeAttributionEngine, TradeAttributionResult
-from .decision_explanation import DecisionExplanationEngine
-from .error_analysis import ErrorAnalysisResult, PredictionErrorAnalyzer
-from .live_simulation import LiveSimulationEngine, LiveSimulationResult
-from .strategy_diagnosis import StrategyDiagnosisEngine, StrategyDiagnosisResult
-from .candidate import AlphaCandidateRanker, CandidateResult
-from .evolution import EvolutionResult, StrategyEvolutionEngine
-from .performance_attribution import PerformanceAttributionEngine, PerformanceAttributionResult
+from .adaptive_weights import WEIGHT_METHODS, AdaptiveFactorWeightEngine, AdaptiveWeightResult
 from .alpha import (
+    RESEARCH_FACTORS,
     AnnualWalkForwardResearch,
     FactorCombinationResearch,
     FactorNeutralizer,
     ProfessionalFactorEvaluator,
     ProfessionalFactorResearchPipeline,
-    RESEARCH_FACTORS,
 )
+from .attribution import TradeAttributionEngine, TradeAttributionResult
+from .candidate import AlphaCandidateRanker, CandidateResult
+from .data import FactorResearchDataBuilder
+from .decision_explanation import DecisionExplanationEngine
+from .error_analysis import ErrorAnalysisResult, PredictionErrorAnalyzer
+from .evolution import EvolutionResult, StrategyEvolutionEngine
+from .factor_evaluation import FactorEvaluator, factor_contribution_analysis
+from .live_simulation import LiveSimulationEngine, LiveSimulationResult
+from .optimization import ParameterOptimizer, factor_weight_candidates
+from .performance_attribution import PerformanceAttributionEngine, PerformanceAttributionResult
+from .preprocessing import ResearchPreprocessor, ResearchPreprocessResult
+from .strategy_diagnosis import StrategyDiagnosisEngine, StrategyDiagnosisResult
+from .walk_forward import WalkForwardConfig, WalkForwardPeriod, WalkForwardValidator
 
 __all__ = [
-    "FactorEvaluator",
-    "FactorCombinationResearch",
-    "FactorNeutralizer",
-    "FactorResearchDataBuilder",
-    "ParameterOptimizer",
-    "ProfessionalFactorEvaluator",
-    "ProfessionalFactorResearchPipeline",
     "RESEARCH_FACTORS",
-    "ResearchPreprocessResult",
-    "ResearchPreprocessor",
-    "AnnualWalkForwardResearch",
+    "WEIGHT_METHODS",
     "AdaptiveFactorWeightEngine",
-    "AlphaCandidateRanker",
     "AdaptiveWeightResult",
+    "AlphaCandidateRanker",
+    "AnnualWalkForwardResearch",
+    "CandidateResult",
     "DecisionExplanationEngine",
     "ErrorAnalysisResult",
-    "CandidateResult",
     "EvolutionResult",
+    "FactorCombinationResearch",
+    "FactorEvaluator",
+    "FactorNeutralizer",
+    "FactorResearchDataBuilder",
     "LiveSimulationEngine",
     "LiveSimulationResult",
-    "PredictionErrorAnalyzer",
+    "ParameterOptimizer",
     "PerformanceAttributionEngine",
     "PerformanceAttributionResult",
+    "PredictionErrorAnalyzer",
+    "ProfessionalFactorEvaluator",
+    "ProfessionalFactorResearchPipeline",
+    "ResearchPreprocessResult",
+    "ResearchPreprocessor",
     "StrategyDiagnosisEngine",
     "StrategyDiagnosisResult",
     "StrategyEvolutionEngine",
     "TradeAttributionEngine",
     "TradeAttributionResult",
-    "WEIGHT_METHODS",
     "WalkForwardConfig",
     "WalkForwardPeriod",
     "WalkForwardValidator",

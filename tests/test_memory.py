@@ -1,7 +1,12 @@
 import pandas as pd
 import pytest
 
-from quant.memory import ModelPredictionSnapshot, SignalSnapshot, TradeDecisionSnapshot, TradeMemoryStore
+from quant.memory import (
+    ModelPredictionSnapshot,
+    SignalSnapshot,
+    TradeDecisionSnapshot,
+    TradeMemoryStore,
+)
 
 
 def test_trade_memory_persists_required_decision_schema_and_realizes_return(tmp_path):
@@ -27,7 +32,10 @@ def test_trade_memory_persists_required_decision_schema_and_realizes_return(tmp_
     store.upsert(decision)
     trades = store.realize()
 
-    assert set(("date", "symbol", "strategy", "model_score", "factor_scores", "industry", "market_regime", "entry_price", "exit_price", "future_return", "prediction_error")).issubset(trades.columns)
+    assert {
+        "date", "symbol", "strategy", "model_score", "factor_scores", "industry",
+        "market_regime", "entry_price", "exit_price", "future_return", "prediction_error",
+    }.issubset(trades.columns)
     assert trades.loc[0, "symbol"] == "000001"
     assert trades.loc[0, "factor_scores"] == {"momentum_5": 0.4}
     assert trades.loc[0, "future_return"] == pytest.approx(0.1)

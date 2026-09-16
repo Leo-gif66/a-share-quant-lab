@@ -16,7 +16,6 @@ from ..portfolio.allocator import PortfolioAllocator
 from ..regime import MarketRegimeDetector
 from ..research.decision_explanation import DecisionExplanationEngine
 
-
 RESULT_COLUMNS = (
     "date",
     "equity",
@@ -257,7 +256,7 @@ class WalkForwardSimulator:
                 "period": (index - self.settings.train_window) // self.settings.validation_window,
                 "regime": snapshot.state,
                 "training_end_date": matured["exit_date"].max() if not matured.empty else pd.NaT,
-                "training_observations": int(len(matured)),
+                "training_observations": len(matured),
             }
         return plans
 

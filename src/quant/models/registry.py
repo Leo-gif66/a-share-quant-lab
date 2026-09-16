@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 import importlib
 import pkgutil
-from typing import Callable
+from collections.abc import Callable
+
 from .base import BaseAlphaModel
 
 _MODELS: dict[str, Callable[..., BaseAlphaModel]] = {}

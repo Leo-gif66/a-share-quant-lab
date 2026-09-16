@@ -1,13 +1,46 @@
+# Python environments, caches, and test output
 .venv/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local configuration and credentials
 .env
-.mlruns/
-mlruns/
+.env.*
+!.env.example
+credentials/
+secrets/
+*.pem
+*.key
+
+# Reproducible market data and runtime state
 data/raw/
 data/processed/
 data/features/
 data/datasets/
+data/components/
+data/memory/
+data/paper/
+data/validation/
+
+# Generated experiment, model, and reporting artifacts
 artifacts/
+mlruns/
+.mlruns/
+models/*.joblib
+models/*.json
+models/*.csv
+research/results/
 reports/
+
+# Local databases and logs
 *.duckdb
+*.log
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db

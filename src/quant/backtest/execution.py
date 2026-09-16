@@ -221,7 +221,7 @@ class ProfessionalPortfolio:
                 return False
         return float(bar["open"]) > 0
 
-    def _round_lot(self, quantity: float | int) -> int:
+    def _round_lot(self, quantity: float) -> int:
         return int(float(quantity) // self.settings.lot_size * self.settings.lot_size)
 
 

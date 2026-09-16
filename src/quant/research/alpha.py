@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 import pandas as pd
@@ -13,7 +13,6 @@ from sklearn.ensemble import RandomForestRegressor
 from ..data.universe import Universe
 from ..factors.advanced import AdvancedFactorEngine
 from .preprocessing import ResearchPreprocessor
-
 
 RESEARCH_FACTORS: tuple[str, ...] = (
     "momentum_5", "momentum_20", "momentum_60", "momentum_120",
@@ -274,14 +273,14 @@ class ProfessionalFactorEvaluator:
                     "Rank_IC": float(series["Rank_IC"].mean()) if sufficient else np.nan,
                     "IC_mean": ic_mean, "IC_std": ic_std, "ICIR": icir, "t_stat": t_stat,
                     "annualized_long_short_return": annualized, "stability": stability,
-                    "observations": int(len(ic)),
+                    "observations": len(ic),
                     "coverage_pct": float(coverage_values["coverage_pct"])
                     if coverage_values is not None else 0.0,
                     "nan_ratio": float(coverage_values["nan_ratio"])
                     if coverage_values is not None else 1.0,
                     "valid_samples": int(coverage_values["valid_samples"])
                     if coverage_values is not None else 0,
-                    "IC_sample_count": int(len(ic)),
+                    "IC_sample_count": len(ic),
                     "status": "ok" if sufficient else "insufficient_data",
                 }
             )

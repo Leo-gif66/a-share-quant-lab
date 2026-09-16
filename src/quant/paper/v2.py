@@ -8,12 +8,11 @@ prices known on that date, and rejects a price snapshot from the future.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
 
 ORDER_COLUMNS = ("date", "symbol", "target_weight", "status")
 FILL_COLUMNS = ("date", "symbol", "side", "quantity", "price", "notional", "cost")
@@ -43,7 +42,7 @@ class PaperTradingAccountV2:
     last_run_date: pd.Timestamp | None = None
 
     @classmethod
-    def load(cls, path: str | Path, settings: PaperTradingSettings | None = None) -> "PaperTradingAccountV2":
+    def load(cls, path: str | Path, settings: PaperTradingSettings | None = None) -> PaperTradingAccountV2:
         target = Path(path)
         defaults = settings or PaperTradingSettings()
         if not target.exists():

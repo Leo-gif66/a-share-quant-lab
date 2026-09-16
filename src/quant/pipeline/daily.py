@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Mapping
 
 import pandas as pd
 
@@ -206,7 +206,7 @@ class DailyResearchPipeline:
             try:
                 model = joblib.load(path)
                 prediction = model.predict(panel)
-            except Exception:  # incompatible old model is not a valid daily prediction
+            except Exception:  # noqa: BLE001, S112 - incompatible persisted artifacts are intentionally skipped
                 continue
             result = panel.loc[:, ["date", "code"]].copy()
             result["model_prediction"] = pd.to_numeric(prediction, errors="coerce")

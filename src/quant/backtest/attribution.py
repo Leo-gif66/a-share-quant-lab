@@ -34,7 +34,6 @@ class DailyAttribution:
         frame["equity"] = pd.to_numeric(frame["equity"], errors="raise")
         frame = frame.sort_values("date").reset_index(drop=True)
         prior_equity = frame["equity"].shift(1)
-        portfolio_return = frame["equity"].pct_change()
         market = _align_effect(market_return, frame["date"], "market_return")
         factor = _align_effect(factor_return, frame["date"], "factor_return")
         result = pd.DataFrame(

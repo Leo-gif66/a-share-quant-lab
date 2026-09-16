@@ -11,7 +11,6 @@ import pandas as pd
 from ..models import RankingModel
 from .institutional import InstitutionalPortfolioBacktestEngine
 
-
 MLModelName = Literal["linear", "random_forest", "lightgbm", "xgboost"]
 
 

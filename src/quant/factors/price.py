@@ -1,6 +1,7 @@
 from __future__ import annotations
+
 import numpy as np
-import pandas as pd
+
 from .base import Factor
 from .registry import register
 

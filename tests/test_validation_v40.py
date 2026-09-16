@@ -4,7 +4,13 @@ import yaml
 
 from quant.evolution import StrategyVersionStore
 from quant.research import PerformanceAttributionEngine
-from quant.validation import RobustnessConfig, RobustnessTester, WalkForwardSettings, WalkForwardSimulator, benchmark_comparison
+from quant.validation import (
+    RobustnessConfig,
+    RobustnessTester,
+    WalkForwardSettings,
+    WalkForwardSimulator,
+    benchmark_comparison,
+)
 
 
 def _market_data(periods: int = 70):

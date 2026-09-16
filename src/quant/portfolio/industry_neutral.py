@@ -19,7 +19,6 @@ from ..data.universe import Universe
 from ..risk import RiskSettings
 from .backtest import PortfolioBacktestEngine
 
-
 TARGET_COLUMNS = (
     "date",
     "code",
@@ -54,7 +53,7 @@ class PortfolioConstraints:
             raise ValueError("max_stock_weight must be in (0, 1]")
 
     @classmethod
-    def from_yaml(cls, path: str | Path = "configs/portfolio_constraints.yaml") -> "PortfolioConstraints":
+    def from_yaml(cls, path: str | Path = "configs/portfolio_constraints.yaml") -> PortfolioConstraints:
         with Path(path).open(encoding="utf-8") as file:
             values = yaml.safe_load(file) or {}
         if not isinstance(values, Mapping):
@@ -89,7 +88,7 @@ class IndustryNeutralBuilder:
     @classmethod
     def from_yaml(
         cls, path: str | Path = "configs/portfolio_constraints.yaml", top_n: int = 20
-    ) -> "IndustryNeutralBuilder":
+    ) -> IndustryNeutralBuilder:
         return cls(top_n=top_n, constraints=PortfolioConstraints.from_yaml(path))
 
     def construct(

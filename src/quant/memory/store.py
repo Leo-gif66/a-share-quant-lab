@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
-
 
 TRADE_COLUMNS = (
     "date",
@@ -75,7 +75,7 @@ class TradeDecisionSnapshot:
         signal: SignalSnapshot,
         prediction: ModelPredictionSnapshot,
         **execution: Any,
-    ) -> "TradeDecisionSnapshot":
+    ) -> TradeDecisionSnapshot:
         if pd.Timestamp(signal.date) != pd.Timestamp(prediction.date) or signal.symbol != prediction.symbol:
             raise ValueError("signal and prediction snapshots must describe the same decision")
         return cls(

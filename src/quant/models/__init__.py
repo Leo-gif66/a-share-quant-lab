@@ -1,8 +1,8 @@
 """Model factories and time-ordered ranking research models."""
 
 from .ranking import (
-    RankingModel,
     RankingLabelEncoding,
+    RankingModel,
     TimeSplit,
     add_future_excess_return,
     encode_ranking_labels,
@@ -12,8 +12,8 @@ from .ranking import (
 )
 
 __all__ = [
-    "RankingModel",
     "RankingLabelEncoding",
+    "RankingModel",
     "TimeSplit",
     "add_future_excess_return",
     "encode_ranking_labels",

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -13,56 +12,56 @@ from rich import print
 
 from .backtest import BacktestEngine, run_backtest, score_panel
 from .config import load_config
-from .data.downloader import DataDownloader
 from .data.components.akshare_provider import AKShareComponentProvider
 from .data.components.provider import LocalFirstComponentProvider
+from .data.downloader import DataDownloader
 from .data.industry import AKShareIndustryProvider, load_industry_metadata
 from .data.providers.tencent_index import TencentIndexProvider
 from .data.storage import Storage
 from .data.universe import Universe
 from .data.universe_builder import UniverseBuilder
 from .data.validator import DataValidator, ResearchDataValidator
-from .evolution import StrategyVersionStore
 from .demo import synthetic_prices
+from .evolution import StrategyVersionStore
 from .factors.engine import FactorEngine
 from .factors.registry import names as factor_names
 from .features import add_label, build_features
-from .models.factory import names as model_names
+from .memory import TradeMemoryStore
 from .models import (
     RankingModel,
     add_future_excess_return,
     prediction_ic_metrics,
     time_ordered_split,
 )
+from .models.factory import names as model_names
 from .paper import PaperAccount, PaperTradingAccountV2, PaperTradingEngine, PaperTradingEngineV2
+from .pipeline import DailyResearchPipeline
 from .portfolio import (
+    CompositeScorer,
+    FactorProcessor,
     IndustryNeutralPortfolioBacktestEngine,
     InstitutionalPortfolioBacktestEngine,
     IntelligentPortfolioBacktestEngine,
     MLRankingPortfolioBacktestEngine,
-    FactorProcessor,
     PortfolioAllocator,
     PortfolioBacktestEngine,
-    CompositeScorer,
     compare_portfolio_results,
 )
-from .reporting import ResearchReportBuilder
-from .memory import TradeMemoryStore
 from .regime import MarketRegimeDetector
-from .pipeline import DailyResearchPipeline
+from .reporting import ResearchReportBuilder
 from .research import (
+    RESEARCH_FACTORS,
     AdaptiveFactorWeightEngine,
     AnnualWalkForwardResearch,
     FactorCombinationResearch,
     FactorEvaluator,
     FactorResearchDataBuilder,
-    ProfessionalFactorResearchPipeline,
-    RESEARCH_FACTORS,
     LiveSimulationEngine,
+    PerformanceAttributionEngine,
     PredictionErrorAnalyzer,
+    ProfessionalFactorResearchPipeline,
     StrategyDiagnosisEngine,
     TradeAttributionEngine,
-    PerformanceAttributionEngine,
 )
 from .training import train_model
 from .validation import RobustnessTester, WalkForwardSettings, WalkForwardSimulator
@@ -312,7 +311,7 @@ def industry_update(
     )
     try:
         result = provider.update_snapshot()
-    except Exception as exc:  # noqa: BLE001 - an old snapshot remains intact on a failed refresh
+    except Exception as exc:
         print(f"[red]FAILED[/red] {str(exc) or exc.__class__.__name__}")
         raise typer.Exit(code=1) from exc
     print(f"[green]SAVED[/green] {output}: {result.records} stocks, {result.industries} industries")
@@ -345,7 +344,7 @@ def universe_build(
     provider = LocalFirstComponentProvider(component_dir=component_dir)
     try:
         industry_metadata = load_industry_metadata(industry_path)
-    except Exception as exc:  # noqa: BLE001 - invalid local metadata must not be silently ignored
+    except Exception as exc:
         print(f"[red]FAILED[/red] {str(exc) or exc.__class__.__name__}")
         raise typer.Exit(code=1) from exc
     builder = UniverseBuilder(
@@ -355,7 +354,7 @@ def universe_build(
     )
     try:
         stocks = builder.write_universe(output)
-    except Exception as exc:  # noqa: BLE001 - show an actionable import failure in the CLI
+    except Exception as exc:
         print(f"[red]FAILED[/red] {str(exc) or exc.__class__.__name__}")
         raise typer.Exit(code=1) from exc
 
@@ -370,7 +369,7 @@ def universe_check(universe_path: str = "configs/universe_large.yaml"):
     """Validate and summarize the generated real A-share universe."""
     try:
         stocks = Universe(universe_path).stocks()
-    except Exception as exc:  # noqa: BLE001 - malformed user configs should report cleanly
+    except Exception as exc:
         print(f"[red]FAILED[/red] {str(exc) or exc.__class__.__name__}")
         raise typer.Exit(code=1) from exc
     counts = _universe_counts(stocks)
@@ -729,7 +728,7 @@ def strategy_diagnosis(
     )
     print("[bold]Strategy diagnosis[/bold]")
     print(diagnosis.recommendations.to_string(index=False))
-    print(f"Error analysis: data/memory/error_analysis.parquet")
+    print("Error analysis: data/memory/error_analysis.parquet")
     print(f"Diagnosis report: {report}")
     print(f"Learned factor weights: {learned_path}")
     if version.changed:
@@ -815,7 +814,7 @@ def walk_forward(
             memory=TradeMemoryStore(memory_path),
             benchmarks=_local_validation_benchmarks(root),
         )
-    except Exception as exc:  # noqa: BLE001 - preserve old commands and show a concise validation failure
+    except Exception as exc:
         print(f"[red]FAILED[/red] {str(exc) or exc.__class__.__name__}")
         raise typer.Exit(code=1) from exc
     report = ResearchReportBuilder().build_walk_forward(
@@ -925,7 +924,7 @@ def robustness(
             return result.metrics
 
         results = RobustnessTester().run(runner)
-    except Exception as exc:  # noqa: BLE001 - infrastructure failures, unlike scenario failures, stop the command
+    except Exception as exc:
         print(f"[red]FAILED[/red] {str(exc) or exc.__class__.__name__}")
         raise typer.Exit(code=1) from exc
     report = ResearchReportBuilder().build_robustness(results)
@@ -971,7 +970,7 @@ def daily_run(
     )
     try:
         result = pipeline.run()
-    except Exception as exc:  # noqa: BLE001 - print an actionable single command failure
+    except Exception as exc:
         print(f"[red]FAILED[/red] {str(exc) or exc.__class__.__name__}")
         raise typer.Exit(code=1) from exc
     print("[bold]Daily research pipeline[/bold]")
@@ -1016,7 +1015,7 @@ def paper_run(
             output_dir=output_dir,
             as_of=as_of,
         )
-    except Exception as exc:  # noqa: BLE001 - preserve the prior persistent account on failure
+    except Exception as exc:
         print(f"[red]FAILED[/red] {str(exc) or exc.__class__.__name__}")
         raise typer.Exit(code=1) from exc
     positions = pd.DataFrame(
@@ -1064,9 +1063,9 @@ def ml_train(
     )
     metrics.update(
         {
-            "training_rows": int(len(split.train)),
-            "validation_rows": int(len(split.validation)),
-            "test_rows": int(len(split.test)),
+            "training_rows": len(split.train),
+            "validation_rows": len(split.validation),
+            "test_rows": len(split.test),
             **model.ranking_label_info,
         }
     )

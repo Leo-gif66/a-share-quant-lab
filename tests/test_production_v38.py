@@ -7,9 +7,9 @@ import yaml
 from quant.paper import PaperTradingEngineV2, PaperTradingSettings
 from quant.pipeline import DailyResearchPipeline
 from quant.portfolio import AllocationSettings, PortfolioAllocator
+from quant.portfolio.factor_processing import FactorSpec
 from quant.regime import MarketRegimeDetector
 from quant.research import AlphaCandidateRanker, StrategyEvolutionEngine
-from quant.portfolio.factor_processing import FactorSpec
 
 
 def _benchmark(periods: int = 210) -> pd.DataFrame:

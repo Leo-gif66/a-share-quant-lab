@@ -1,10 +1,13 @@
 from __future__ import annotations
+
 from pathlib import Path
+
 import joblib
 import pandas as pd
+
+from ..utils import winsorized_zscore
 from .base import BaseAlphaModel
 from .registry import register
-from ..utils import winsorized_zscore
 
 
 @register("rule")

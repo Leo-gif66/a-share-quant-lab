@@ -1,8 +1,8 @@
 import pandas as pd
 import pytest
 
-from quant.research import TradeAttributionEngine
 from quant.reporting import ResearchReportBuilder
+from quant.research import TradeAttributionEngine
 
 
 def test_trade_attribution_calculates_return_factor_industry_market_and_report(tmp_path):

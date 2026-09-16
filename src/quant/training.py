@@ -1,10 +1,13 @@
 from __future__ import annotations
-from datetime import datetime
-from pathlib import Path
+
 import hashlib
 import json
+from datetime import datetime
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
 from .models.factory import create
 from .utils import rank_ic
 
@@ -26,7 +29,7 @@ def time_split(df: pd.DataFrame, train_ratio: float, valid_ratio: float, purge_d
 def _version_id(cfg: dict) -> str:
     raw = json.dumps(cfg, ensure_ascii=False, sort_keys=True, default=str).encode()
     h = hashlib.sha256(raw).hexdigest()[:8]
-    return f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{h}"
+    return f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{h}"  # noqa: DTZ005 - preserve local artifact IDs
 
 
 def train_model(dataset: pd.DataFrame, cfg: dict, artifact_dir: str = "artifacts") -> dict:
@@ -78,7 +81,7 @@ def train_model(dataset: pd.DataFrame, cfg: dict, artifact_dir: str = "artifacts
             })
             mlflow.log_metrics({k: float(v) for k, v in metrics.items() if "rows" not in k})
             mlflow.log_artifacts(str(version_dir))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - optional MLflow telemetry must not block model training
         print(f"[WARN] MLflow logging skipped: {e}")
 
     return {**metrics, "model_id": model_id, "model_path": str(model_path)}

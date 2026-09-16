@@ -1,5 +1,11 @@
 """Portfolio construction components for the v1.0 backtest mode."""
 
+from .allocator import AllocationResult, AllocationSettings, PortfolioAllocator
+from .alpha import (
+    AlphaBacktestComparison,
+    MLRankingPortfolioBacktestEngine,
+    compare_portfolio_results,
+)
 from .backtest import PortfolioBacktestEngine, PortfolioBacktestResult
 from .factor_processing import FactorProcessor, FactorSpec, load_factor_specs
 from .industry_neutral import (
@@ -10,12 +16,13 @@ from .industry_neutral import (
 )
 from .institutional import InstitutionalPortfolioBacktestEngine
 from .intelligent import IntelligentBacktestResult, IntelligentPortfolioBacktestEngine
-from .alpha import AlphaBacktestComparison, MLRankingPortfolioBacktestEngine, compare_portfolio_results
 from .optimizer import EqualWeightOptimizer
 from .scoring import CompositeScorer
-from .allocator import AllocationResult, AllocationSettings, PortfolioAllocator
 
 __all__ = [
+    "AllocationResult",
+    "AllocationSettings",
+    "AlphaBacktestComparison",
     "CompositeScorer",
     "EqualWeightOptimizer",
     "FactorProcessor",
@@ -26,14 +33,11 @@ __all__ = [
     "IntelligentBacktestResult",
     "IntelligentPortfolioBacktestEngine",
     "MLRankingPortfolioBacktestEngine",
+    "PortfolioAllocator",
     "PortfolioBacktestEngine",
     "PortfolioBacktestResult",
     "PortfolioConstraints",
-    "AlphaBacktestComparison",
     "compare_portfolio_results",
-    "AllocationResult",
-    "AllocationSettings",
-    "PortfolioAllocator",
     "industry_exposure",
     "load_factor_specs",
 ]

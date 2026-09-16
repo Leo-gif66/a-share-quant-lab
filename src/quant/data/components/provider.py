@@ -11,7 +11,7 @@ import csv
 import re
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from .sector_mapper import SectorMapper
 
@@ -44,7 +44,7 @@ class LocalFirstComponentProvider:
     columns can be English or commonly used Chinese names.
     """
 
-    _FILE_ALIASES = {
+    _FILE_ALIASES: ClassVar[dict[str, tuple[str, ...]]] = {
         "hs300": ("hs300", "csi300", "000300"),
         "csi500": ("csi500", "000905"),
         "chinext": ("chinext", "399006", "cyb"),
@@ -104,7 +104,7 @@ class LocalFirstComponentProvider:
             stem = re.sub(r"[^a-z0-9]", "", path.stem.lower())
             if any(alias in stem for alias in aliases):
                 matches.append(path)
-        return sorted(matches)[0] if matches else None
+        return min(matches) if matches else None
 
     @staticmethod
     def _read_csv(path: Path) -> list[dict[str, str]]:

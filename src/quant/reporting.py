@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from html import escape
 from pathlib import Path
-from typing import Mapping
 
 import pandas as pd
 

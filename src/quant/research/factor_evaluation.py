@@ -162,7 +162,7 @@ class FactorEvaluator:
                     "valid_samples": int(coverage_row["valid_samples"])
                     if coverage_row is not None
                     else 0,
-                    "IC_sample_count": int(len(series)),
+                    "IC_sample_count": len(series),
                     "status": "ok" if sufficient else "insufficient_data",
                 }
             )

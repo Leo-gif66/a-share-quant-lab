@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 from pathlib import Path
+
 import joblib
 import pandas as pd
+
 from .base import BaseAlphaModel
 from .registry import register
 

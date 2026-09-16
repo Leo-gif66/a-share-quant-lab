@@ -12,7 +12,6 @@ import pandas as pd
 from ..memory import TradeDecisionSnapshot, TradeMemoryStore
 from .decision_explanation import DecisionExplanationEngine
 
-
 SIMULATION_COLUMNS = (
     "date",
     "entry_date",

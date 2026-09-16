@@ -98,7 +98,7 @@ class PaperAccount:
     @classmethod
     def load(
         cls, path: str | Path, settings: ExecutionSettings | None = None
-    ) -> "PaperAccount":
+    ) -> PaperAccount:
         """Restore cash, T+1 lots, orders, and PnL from an account snapshot."""
         source = Path(path)
         if not source.exists():

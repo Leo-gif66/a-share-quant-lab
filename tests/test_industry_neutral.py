@@ -7,7 +7,6 @@ from quant.data.universe import Universe
 from quant.portfolio.industry_neutral import (
     IndustryNeutralBuilder,
     IndustryNeutralPortfolioBacktestEngine,
-    PortfolioConstraints,
 )
 
 
@@ -67,7 +66,7 @@ def test_industry_neutral_backtest_uses_existing_accounting_and_reports_exposure
     raw_dir.mkdir()
     features_dir.mkdir()
     dates = pd.bdate_range("2024-01-01", periods=30)
-    scores, industries = _scores_and_industries()
+    _scores, industries = _scores_and_industries()
     stocks = []
     for number, row in enumerate(industries.itertuples(index=False), start=1):
         close = 10 * (1 + number * 0.0002) ** pd.Series(range(len(dates)))

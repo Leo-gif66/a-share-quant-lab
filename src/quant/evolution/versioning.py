@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -115,5 +116,5 @@ class StrategyVersionStore:
         with path.open(encoding="utf-8") as stream:
             payload = yaml.safe_load(stream)
         if not isinstance(payload, dict):
-            raise ValueError(f"strategy version {path} must contain a mapping")
+            raise ValueError(f"strategy version {path} must contain a mapping")  # noqa: TRY004 - invalid YAML content
         return payload

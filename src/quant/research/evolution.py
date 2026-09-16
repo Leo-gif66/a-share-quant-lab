@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -45,7 +46,7 @@ class StrategyEvolutionEngine:
         self.max_weight_change = max_weight_change
 
     @classmethod
-    def from_yaml(cls, path: str | Path = "configs/factor_weights.yaml", max_weight_change: float = 0.10) -> "StrategyEvolutionEngine":
+    def from_yaml(cls, path: str | Path = "configs/factor_weights.yaml", max_weight_change: float = 0.10) -> StrategyEvolutionEngine:
         with Path(path).open(encoding="utf-8") as stream:
             payload = yaml.safe_load(stream)
         factors = payload.get("factors") if isinstance(payload, dict) else None

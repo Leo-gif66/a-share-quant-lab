@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 import numpy as np
 import pandas as pd
@@ -56,7 +56,7 @@ class TradeAttributionEngine:
         summary = pd.DataFrame(
             [
                 {
-                    "trade_count": int(len(reviewed)),
+                    "trade_count": len(reviewed),
                     "total_return": float(reviewed["weighted_return"].sum()),
                     "market_return": float(reviewed["market_contribution"].sum()),
                     "excess_return": float((reviewed["effective_weight"] * reviewed["excess_return"]).sum()),

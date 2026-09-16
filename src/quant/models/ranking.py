@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal
 
 import joblib
 import numpy as np
@@ -13,7 +14,6 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 
 from ..research.preprocessing import ResearchPreprocessor
-
 
 ModelName = Literal["lightgbm", "random_forest", "linear", "xgboost"]
 
@@ -151,7 +151,7 @@ class RankingModel:
         self.preprocessor = ResearchPreprocessor()
         self.ranking_label_info: dict[str, int] = {}
 
-    def fit(self, data: pd.DataFrame, features: Sequence[str], label: str) -> "RankingModel":
+    def fit(self, data: pd.DataFrame, features: Sequence[str], label: str) -> RankingModel:
         required = {"date", label, *features}
         if not required.issubset(data.columns):
             raise ValueError(f"ranking data missing columns: {', '.join(sorted(required.difference(data.columns)))}")

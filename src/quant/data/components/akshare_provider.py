@@ -8,7 +8,7 @@ import tempfile
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pandas as pd
 
@@ -29,7 +29,7 @@ class AKShareComponentProvider:
     failure leaves the previous CSV untouched.
     """
 
-    INDEXES = {
+    INDEXES: ClassVar[dict[str, tuple[str, str, str, int]]] = {
         "hs300": ("CSI300", "000300", "csi300.csv", 280),
         "csi500": ("CSI500", "000905", "csi500.csv", 480),
         "chinext": ("ChiNext", "399006", "chinext.csv", 100),

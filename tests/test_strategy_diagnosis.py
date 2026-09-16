@@ -1,9 +1,9 @@
 from pathlib import Path
 
+from test_error_analysis import _completed_trades
+
 from quant.reporting import ResearchReportBuilder
 from quant.research import PredictionErrorAnalyzer, StrategyDiagnosisEngine
-
-from test_error_analysis import _completed_trades
 
 
 def test_strategy_diagnosis_identifies_bad_conditions_and_renders_report(tmp_path: Path):

@@ -1,6 +1,9 @@
 from __future__ import annotations
+
 from datetime import date
+
 import pandas as pd
+
 from .provider import DataProvider
 
 
@@ -17,7 +20,7 @@ class AkshareProvider(DataProvider):
                 raw = self.ak.index_stock_cons_csindex(symbol=idx)
                 x = raw[["成分券代码", "成分券名称"]].copy()
                 x.columns = ["code", "name"]
-            except Exception:
+            except Exception:  # noqa: BLE001 - client-specific failures should trigger the fallback endpoint
                 raw = self.ak.index_stock_cons(symbol=idx)
                 x = raw[["品种代码", "品种名称"]].copy()
                 x.columns = ["code", "name"]
@@ -28,7 +31,7 @@ class AkshareProvider(DataProvider):
         return out.drop_duplicates("code").reset_index(drop=True)
 
     def stock_daily(self, code: str, start: str, end: str | None = None) -> pd.DataFrame:
-        end = end or date.today().strftime("%Y%m%d")
+        end = end or date.today().strftime("%Y%m%d")  # noqa: DTZ011 - preserve the provider's local-session default
         raw = self.ak.stock_zh_a_hist(
             symbol=str(code).zfill(6), period="daily", start_date=start,
             end_date=end, adjust="qfq"
@@ -51,7 +54,7 @@ class AkshareProvider(DataProvider):
         return x.sort_values("date").drop_duplicates("date")
 
     def benchmark_daily(self, symbol: str, start: str, end: str | None = None) -> pd.DataFrame:
-        end = end or date.today().strftime("%Y%m%d")
+        end = end or date.today().strftime("%Y%m%d")  # noqa: DTZ011 - preserve the provider's local-session default
         x = self.ak.stock_zh_index_daily_em(symbol=symbol, start_date=start, end_date=end)
         x["date"] = pd.to_datetime(x["date"])
         return x.sort_values("date")

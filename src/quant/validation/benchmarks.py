@@ -9,7 +9,6 @@ import pandas as pd
 
 from ..backtest.metrics import calculate_metrics
 
-
 BENCHMARK_NAMES = ("CSI300", "CSI500", "CSI1000")
 
 
@@ -50,7 +49,7 @@ def benchmark_comparison(
                     "alpha": metrics["alpha"],
                     "beta": metrics["beta"],
                     "information_ratio": information_ratio,
-                    "observations": int(len(combined)),
+                    "observations": len(combined),
                     "detail": "local index history",
                 }
             )

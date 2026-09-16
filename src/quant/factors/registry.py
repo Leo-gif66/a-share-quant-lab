@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import importlib
 import pkgutil
+
 from .base import Factor
 
 _FACTORS: dict[str, Factor] = {}
