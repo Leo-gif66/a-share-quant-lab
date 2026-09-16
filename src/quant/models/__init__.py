@@ -1,5 +1,6 @@
 """Model factories and time-ordered ranking research models."""
 
+from .alpha_ensemble import AlphaEnsemble, AlphaEnsembleWeights
 from .ranking import (
     RankingLabelEncoding,
     RankingModel,
@@ -12,6 +13,8 @@ from .ranking import (
 )
 
 __all__ = [
+    "AlphaEnsemble",
+    "AlphaEnsembleWeights",
     "RankingLabelEncoding",
     "RankingModel",
     "TimeSplit",

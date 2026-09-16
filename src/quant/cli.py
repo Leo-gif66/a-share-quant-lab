@@ -12,6 +12,7 @@ from rich import print
 
 from .backtest import BacktestEngine, run_backtest, score_panel
 from .config import load_config
+from .data.benchmarks import BenchmarkCoverageValidator
 from .data.components.akshare_provider import AKShareComponentProvider
 from .data.components.provider import LocalFirstComponentProvider
 from .data.downloader import DataDownloader
@@ -24,6 +25,7 @@ from .data.universe_builder import UniverseBuilder
 from .data.validator import DataValidator, ResearchDataValidator
 from .demo import synthetic_prices
 from .evolution import StrategyVersionStore
+from .factors.alpha import ALPHA_FACTORS
 from .factors.engine import FactorEngine
 from .factors.registry import names as factor_names
 from .features import add_label, build_features
@@ -64,6 +66,19 @@ from .research import (
     StrategyDiagnosisEngine,
     TradeAttributionEngine,
 )
+from .research.alpha_failure import AlphaFailureAnalyzer
+from .research.capacity import capacity_diagnostics
+from .research.experiments import ExperimentRegistry
+from .research.factor_selection import FactorSelector
+from .research.factor_v5 import V5FactorResearchEngine
+from .research.portfolio_v5 import (
+    V5PortfolioEvaluator,
+    run_experiment_matrix,
+    transaction_cost_stress,
+)
+from .research.v5_data import V5ResearchDataBuilder
+from .research.v5_reporting import write_v5_report
+from .research.walk_forward_v5 import V5WalkForwardRunner, V5WalkForwardSettings
 from .training import train_model
 from .validation import (
     RobustnessTester,
@@ -1290,5 +1305,211 @@ def signal(base:str="configs/base.yaml", override:str|None=None, model_path:str|
 @app.command("demo")
 def demo(base:str="configs/base.yaml"):
     c=cfg(base,None); prices,b=synthetic_prices(); panel=build_features(prices,c["features"]["enabled"]); scored=score_panel(panel,c); _eq,_tr,m=run_backtest(scored,b,c); print("[bold green]Core pipeline works.[/bold green]"); print(json.dumps(m,indent=2))
+
+
+@app.command("benchmark-coverage")
+def benchmark_coverage(base: str = "configs/base.yaml", override: str | None = None):
+    """Validate CSI300, CSI500, and CSI1000 independently without substitution."""
+    c = cfg(base, override)
+    coverage = BenchmarkCoverageValidator(Path(c["data"]["storage_root"]) / "raw").coverage()
+    print(coverage.to_string(index=False))
+
+
+@app.command("alpha-v5-research")
+def alpha_v5_research(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    panel_path: str = "data/features/v5_alpha_panel.parquet",
+):
+    """Reconstruct full-history V5 price alpha research and factor selection."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    builder = V5ResearchDataBuilder(
+        raw_dir=root / "raw",
+        universe_path=c["data"].get("universe_path", "configs/universe_large.yaml"),
+        benchmark_path=root / "raw" / "000300.parquet",
+    )
+    try:
+        panel = builder.build(panel_path)
+        factor_columns = [f"{factor}_processed" for factor in ALPHA_FACTORS if f"{factor}_processed" in panel]
+        research = V5FactorResearchEngine().evaluate(panel, factor_columns)
+        factor_path, factor_report = V5FactorResearchEngine().save(research)
+        research.yearly.to_parquet("research/results/factor_v5_yearly.parquet", index=False)
+        research.regimes.to_parquet("research/results/factor_v5_regimes.parquet", index=False)
+        research.sectors.to_parquet("research/results/factor_v5_sectors.parquet", index=False)
+        selection = FactorSelector().select(panel, research.summary, horizon=20)
+        selection_path, selection_report = FactorSelector().save(selection)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"[red]FAILED[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    coverage = BenchmarkCoverageValidator(root / "raw").coverage()
+    coverage.to_csv("research/results/benchmark_coverage_v5.csv", index=False)
+    metadata = ExperimentRegistry().record(
+        _v5_experiment_id("factor-research"),
+        data_coverage=_v5_data_coverage(panel),
+        universe={"configured_stocks": len(Universe(c["data"].get("universe_path", "configs/universe_large.yaml")).stocks())},
+        factor_set=factor_columns,
+        model="none",
+        parameters={"horizons": [5, 10, 20, 60], "fdr": "Benjamini-Hochberg", "seed": int(c["project"].get("seed", 42))},
+        result_metrics={"tested_factors": float(len(factor_columns)), "selected_factors": float(selection.selection["selected"].sum())},
+        notes="Full-history price and market factor research; fundamental coverage is recorded separately and not fabricated.",
+    )
+    print("[bold]V5 alpha research[/bold]")
+    print(research.summary.sort_values(["horizon", "fdr_q_value", "rank_ic"]).to_string(index=False))
+    print(coverage.to_string(index=False))
+    print(f"V5 panel: {panel_path}")
+    print(f"Factor results: {factor_path}")
+    print(f"Factor report: {factor_report}")
+    print(f"Factor selection: {selection_path}")
+    print(f"Selection report: {selection_report}")
+    print(f"Experiment metadata: {metadata}")
+
+
+@app.command("alpha-v5-backtest")
+def alpha_v5_backtest(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    panel_path: str = "data/features/v5_alpha_panel.parquet",
+    model: str = "linear",
+):
+    """Run fold-local V5 selection, ML, ensemble, matrix, cost, and capacity tests."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    path = Path(panel_path)
+    if path.exists():
+        panel = pd.read_parquet(path)
+    else:
+        panel = V5ResearchDataBuilder(
+            raw_dir=root / "raw",
+            universe_path=c["data"].get("universe_path", "configs/universe_large.yaml"),
+            benchmark_path=root / "raw" / "000300.parquet",
+        ).build(path)
+    factor_columns = [f"{factor}_processed" for factor in ALPHA_FACTORS if f"{factor}_processed" in panel]
+    settings = V5WalkForwardSettings(model=model, seed=int(c["project"].get("seed", 42)))
+    try:
+        walk_forward = V5WalkForwardRunner(settings).run(panel, factor_columns)
+        walk_path = V5WalkForwardRunner(settings).save(walk_forward)
+        matrix = run_experiment_matrix(V5PortfolioEvaluator(), walk_forward.scores, horizon=settings.horizon)
+        matrix.to_parquet("research/results/v5_portfolio_matrix.parquet", index=False)
+        costs = transaction_cost_stress(V5PortfolioEvaluator(), walk_forward.scores, horizon=settings.horizon)
+        costs.to_parquet("research/results/v5_cost_stress.parquet", index=False)
+        capacity = capacity_diagnostics(walk_forward.holdings)
+        capacity.to_parquet("research/results/v5_capacity.parquet", index=False)
+    except (RuntimeError, ValueError) as exc:
+        print(f"[red]FAILED[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    factor_summary = pd.read_parquet("research/results/factor_v5_results.parquet") if Path("research/results/factor_v5_results.parquet").exists() else pd.DataFrame()
+    yearly = pd.read_parquet("research/results/factor_v5_yearly.parquet") if Path("research/results/factor_v5_yearly.parquet").exists() else pd.DataFrame()
+    regimes = pd.read_parquet("research/results/factor_v5_regimes.parquet") if Path("research/results/factor_v5_regimes.parquet").exists() else pd.DataFrame()
+    failure_inputs = pd.concat([matrix, costs], ignore_index=True, sort=False)
+    failure = AlphaFailureAnalyzer().analyze(factor_summary, yearly, regimes, walk_forward.folds, failure_inputs, capacity)
+    failure_path = AlphaFailureAnalyzer().save(failure)
+    failure.to_parquet("research/results/alpha_failure_v5.parquet", index=False)
+    report = _write_v5_master_report(root, panel, walk_forward, matrix, costs, capacity, failure)
+    metadata = ExperimentRegistry().record(
+        _v5_experiment_id("walk-forward"),
+        data_coverage=_v5_data_coverage(panel),
+        universe={"configured_stocks": len(Universe(c["data"].get("universe_path", "configs/universe_large.yaml")).stocks())},
+        factor_set=factor_columns,
+        model=model,
+        parameters=asdict(settings),
+        result_metrics={key: float(walk_forward.folds[key].mean()) for key in ("return", "sharpe", "drawdown", "alpha", "turnover", "prediction_IC", "prediction_Rank_IC")},
+        notes="Fold-local factor selection, model fit, validation-weighted ensemble, and all portfolio/cost scenarios retained.",
+    )
+    print("[bold]V5 true walk-forward[/bold]")
+    print(walk_forward.folds.to_string(index=False))
+    print(f"Walk-forward results: {walk_path}")
+    print(f"Portfolio matrix: research/results/v5_portfolio_matrix.parquet ({len(matrix):,} trials)")
+    print("Cost stress: research/results/v5_cost_stress.parquet")
+    print("Capacity diagnostics: research/results/v5_capacity.parquet")
+    print(f"Failure analysis: {failure_path}")
+    print(f"Master report: {report}")
+    print(f"Experiment metadata: {metadata}")
+
+
+@app.command("alpha-failure-analysis")
+def alpha_failure_analysis():
+    """Regenerate explicit V5 failure diagnostics from saved, non-cherry-picked artifacts."""
+    required = {
+        "factor summary": Path("research/results/factor_v5_results.parquet"),
+        "yearly factor IC": Path("research/results/factor_v5_yearly.parquet"),
+        "regime factor IC": Path("research/results/factor_v5_regimes.parquet"),
+        "walk-forward": Path("research/results/walk_forward_v5.parquet"),
+        "portfolio matrix": Path("research/results/v5_portfolio_matrix.parquet"),
+        "cost stress": Path("research/results/v5_cost_stress.parquet"),
+        "capacity": Path("research/results/v5_capacity.parquet"),
+    }
+    missing = [name for name, path in required.items() if not path.exists()]
+    if missing:
+        print(f"[red]FAILED[/red] missing V5 artifacts: {', '.join(missing)}")
+        raise typer.Exit(code=1)
+    matrix = pd.concat([pd.read_parquet(required["portfolio matrix"]), pd.read_parquet(required["cost stress"])], ignore_index=True, sort=False)
+    findings = AlphaFailureAnalyzer().analyze(
+        pd.read_parquet(required["factor summary"]), pd.read_parquet(required["yearly factor IC"]),
+        pd.read_parquet(required["regime factor IC"]), pd.read_parquet(required["walk-forward"]), matrix,
+        pd.read_parquet(required["capacity"]),
+    )
+    report = AlphaFailureAnalyzer().save(findings)
+    findings.to_parquet("research/results/alpha_failure_v5.parquet", index=False)
+    print(findings.to_string(index=False))
+    print(f"Failure report: {report}")
+
+
+def _v5_experiment_id(prefix: str) -> str:
+    return f"v5-{prefix}-{pd.Timestamp.now(tz='UTC').strftime('%Y%m%dT%H%M%S%f')}"
+
+
+def _v5_data_coverage(panel: pd.DataFrame) -> dict[str, object]:
+    dates = pd.to_datetime(panel["date"], errors="coerce")
+    return {
+        "rows": len(panel), "stocks": int(panel["code"].nunique()), "dates": int(dates.nunique()),
+        "start": dates.min().date().isoformat() if dates.notna().any() else None,
+        "end": dates.max().date().isoformat() if dates.notna().any() else None,
+        "fundamental_rows": int(panel["fundamental_announcement_date"].notna().sum()) if "fundamental_announcement_date" in panel else 0,
+    }
+
+
+def _write_v5_master_report(
+    root: Path,
+    panel: pd.DataFrame,
+    walk_forward: object,
+    matrix: pd.DataFrame,
+    costs: pd.DataFrame,
+    capacity: pd.DataFrame,
+    failure: pd.DataFrame,
+) -> Path:
+    baseline_path = Path("research/results/v4_baseline.json")
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8")) if baseline_path.exists() else {}
+    baseline_metrics = pd.DataFrame([baseline.get("metrics", {})])
+    v5_metrics = walk_forward.folds.loc[:, ["return", "sharpe", "drawdown", "alpha", "turnover", "information_ratio"]].mean().to_frame("v5_fold_mean").reset_index(names="metric") if not walk_forward.folds.empty else pd.DataFrame()
+    coverage = pd.DataFrame([_v5_data_coverage(panel)])
+    audit = ValidationCoverageAuditor(raw_dir=root / "raw", features_dir=root / "features", benchmark_path=root / "raw" / "000300.parquet").audit().summary()
+    factor_summary = pd.read_parquet("research/results/factor_v5_results.parquet") if Path("research/results/factor_v5_results.parquet").exists() else pd.DataFrame()
+    selection = pd.read_csv("research/results/factor_selection.csv") if Path("research/results/factor_selection.csv").exists() else pd.DataFrame()
+    breadth_columns = ["date", "advance_decline_ratio", "percent_above_ma20", "breadth_momentum", "volatility_regime"]
+    breadth = panel.loc[:, [column for column in breadth_columns if column in panel]].drop_duplicates("date").tail(252)
+    fundamentals = pd.DataFrame([{"available_rows": int(panel["fundamental_announcement_date"].notna().sum()) if "fundamental_announcement_date" in panel else 0, "status": "available" if "fundamental_announcement_date" in panel and panel["fundamental_announcement_date"].notna().any() else "unavailable; no data fabricated"}])
+    ensemble = walk_forward.folds.loc[:, ["fold", "model", "ensemble_weights", "prediction_IC", "prediction_Rank_IC"]] if not walk_forward.folds.empty else pd.DataFrame()
+    benchmarks = BenchmarkCoverageValidator(root / "raw").coverage()
+    limitations = pd.DataFrame([
+        {"limitation": "fundamentals", "status": fundamentals.loc[0, "status"]},
+        {"limitation": "alpha claim", "status": "No profitability claim is made unless the recorded OOS evidence supports it."},
+        {"limitation": "execution", "status": "V5 portfolio evaluation uses matured forward labels and simplified transaction-cost assumptions."},
+    ])
+    return write_v5_report(
+        "V5 Alpha Reconstruction",
+        (
+            ("V4 baseline", baseline_metrics), ("Dataset coverage", coverage), ("Validation coverage audit", audit),
+            ("Factor IC ranking", factor_summary), ("Factor redundancy and selection", selection),
+            ("Selected alpha set", selection.loc[selection["selected"]] if not selection.empty else selection),
+            ("Fundamentals coverage", fundamentals), ("Market breadth analysis", breadth), ("ML comparison", ensemble),
+            ("Ensemble results", ensemble), ("Walk-forward results", walk_forward.folds),
+            ("Portfolio robustness matrix", matrix), ("Transaction-cost stress", costs),
+            ("Benchmark comparison", benchmarks), ("Alpha failure analysis", failure),
+            ("V4 vs V5 OOS summary", v5_metrics), ("Limitations", limitations),
+        ),
+        "reports/v5_alpha_reconstruction.html",
+    )
+
 
 if __name__=="__main__": app()
