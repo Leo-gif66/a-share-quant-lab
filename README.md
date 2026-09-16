@@ -73,7 +73,7 @@ The small positive held-out LightGBM IC does not translate into a viable portfol
 This project uses [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone <your-repository-url>
+git clone https://github.com/Leo-gif66/a-share-quant-lab.git
 cd a_share_quant_lab
 uv sync
 ```
