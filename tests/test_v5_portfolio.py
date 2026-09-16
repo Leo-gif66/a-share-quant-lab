@@ -5,7 +5,7 @@ import pytest
 
 from quant.models import AlphaEnsemble
 from quant.research.capacity import capacity_diagnostics
-from quant.research.portfolio_v5 import V5PortfolioEvaluator
+from quant.research.portfolio_v5 import V5PortfolioEvaluator, run_experiment_matrix
 
 
 def test_alpha_ensemble_fits_only_validation_then_scores_later_test_dates():
@@ -59,3 +59,22 @@ def test_v5_portfolio_applies_constraints_costs_and_capacity_diagnostics():
     assert result.holdings.groupby("date")["weight"].sum().max() <= 1.0 + 1e-12
     capacity = capacity_diagnostics(result.holdings)
     assert {"position_value", "participation_rate", "capacity_flag"}.issubset(capacity.columns)
+
+
+def test_v5_portfolio_matrix_retains_every_requested_configuration():
+    rows = []
+    for date in pd.bdate_range("2023-01-02", periods=2):
+        for number in range(3):
+            rows.append(
+                {
+                    "date": date, "code": f"{number:06d}", "industry": f"industry-{number}",
+                    "ensemble_score": float(3 - number), "future_return_5d": 0.01,
+                    "benchmark_future_return_5d": 0.005, "label_end_date_5d": date + pd.Timedelta(days=7),
+                    "market_regime": "bull", "volatility_regime": "normal", "amount_20": 1_000_000.0,
+                    "realized_vol_20": 0.2,
+                }
+            )
+    matrix = run_experiment_matrix(V5PortfolioEvaluator(), pd.DataFrame(rows), horizon=5)
+
+    assert len(matrix) == 1_728
+    assert {"research_rank", "annual_return", "sharpe", "turnover"}.issubset(matrix.columns)

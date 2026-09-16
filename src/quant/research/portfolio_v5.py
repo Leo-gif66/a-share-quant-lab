@@ -84,7 +84,7 @@ class V5PortfolioEvaluator:
         industry_limit: float,
         max_stock_weight: float,
         risk_overlay: str,
-        transaction_cost_multiplier: float,
+        transaction_cost_multiplier: float = 1.0,
         include_holdings: bool = True,
     ) -> V5PortfolioResult:
         label, end_date = f"future_return_{horizon}d", f"label_end_date_{horizon}d"
