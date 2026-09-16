@@ -52,8 +52,18 @@ class V5WalkForwardRunner:
     def __init__(self, settings: V5WalkForwardSettings | None = None) -> None:
         self.settings = settings or V5WalkForwardSettings()
 
-    def run(self, panel: pd.DataFrame, factor_columns: list[str]) -> V5WalkForwardResult:
-        """Run chronological folds using only labels matured before each subsequent window."""
+    def run(
+        self,
+        panel: pd.DataFrame,
+        factor_columns: list[str],
+        precomputed_selections: pd.DataFrame | None = None,
+    ) -> V5WalkForwardResult:
+        """Run chronological folds using only labels matured before each subsequent window.
+
+        ``precomputed_selections`` is limited to reusing selections previously
+        frozen from the *same fold's* training window when comparing model
+        classes.  It never supplies validation or test-period outcomes.
+        """
         label = f"future_excess_return_{self.settings.horizon}d"
         label_end = f"label_end_date_{self.settings.horizon}d"
         required = {"date", label, label_end, "sector", "market_regime", *factor_columns}
@@ -71,7 +81,12 @@ class V5WalkForwardRunner:
         for fold_number, bounds in enumerate(self._periods(frame["date"]), start=1):
             train, validation, test = self._split(frame, bounds, label_end)
             assert_training_before_test(train["date"], test["date"])
-            selected, selection = self._select(train, factor_columns)
+            if precomputed_selections is None:
+                selected, selection = self._select(train, factor_columns)
+            else:
+                selected, selection = self._reuse_selection(
+                    precomputed_selections, fold_number, factor_columns
+                )
             selection["fold"] = fold_number
             selections.append(selection)
             factor_weights = self._factor_weights(train, selected, label)
@@ -194,6 +209,28 @@ class V5WalkForwardRunner:
         selected = selection.loc[selection["selected"] & selection["selection_score"].notna()].sort_values("selection_score", ascending=False)["factor"].head(self.settings.max_factors).tolist()
         if not selected:
             raise RuntimeError("no factors survived fold-local selection")
+        return selected, selection
+
+    def _reuse_selection(
+        self, selections: pd.DataFrame, fold_number: int, factors: list[str]
+    ) -> tuple[list[str], pd.DataFrame]:
+        required = {"fold", "factor", "selected", "selection_score"}
+        missing = required.difference(selections.columns)
+        if missing:
+            raise ValueError(f"precomputed selections missing: {', '.join(sorted(missing))}")
+        selection = selections.loc[selections["fold"] == fold_number].copy()
+        if selection.empty:
+            raise ValueError(f"precomputed selections have no fold {fold_number}")
+        valid_factors = set(factors)
+        selected = (
+            selection.loc[selection["selected"].astype(bool) & selection["factor"].isin(valid_factors)]
+            .sort_values("selection_score", ascending=False)["factor"]
+            .head(self.settings.max_factors)
+            .tolist()
+        )
+        if not selected:
+            raise RuntimeError(f"no frozen training-only factors available for fold {fold_number}")
+        selection["selection_source"] = "reused_training_only"
         return selected, selection
 
     def _factor_weights(self, train: pd.DataFrame, selected: list[str], label: str) -> dict[str, float]:

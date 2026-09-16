@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from quant.research.factor_selection import FactorSelector
 from quant.research.factor_v5 import V5FactorResearchEngine
+from quant.research.walk_forward_v5 import V5WalkForwardRunner
 
 
 def _panel() -> pd.DataFrame:
@@ -53,3 +55,22 @@ def test_factor_selector_groups_redundant_features_and_keeps_one_candidate():
     assert result.selection.loc[result.selection["factor"] == "factor_a_processed", "group"].iloc[0] == result.selection.loc[
         result.selection["factor"] == "factor_b_processed", "group"
     ].iloc[0]
+
+
+def test_walk_forward_reuses_only_frozen_selected_factors_for_model_comparison():
+    selections = pd.DataFrame(
+        {
+            "fold": [1, 1, 1],
+            "factor": ["factor_a_processed", "factor_b_processed", "other"],
+            "selected": [True, False, True],
+            "selection_score": [0.4, 0.9, 1.0],
+        }
+    )
+    runner = V5WalkForwardRunner()
+
+    selected, audit = runner._reuse_selection(selections, 1, ["factor_a_processed", "factor_b_processed"])
+
+    assert selected == ["factor_a_processed"]
+    assert audit["selection_source"].eq("reused_training_only").all()
+    with pytest.raises(ValueError, match="no fold 2"):
+        runner._reuse_selection(selections, 2, ["factor_a_processed"])

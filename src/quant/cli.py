@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -1371,6 +1372,8 @@ def alpha_v5_backtest(
     override: str | None = None,
     panel_path: str = "data/features/v5_alpha_panel.parquet",
     model: str = "linear",
+    reuse_selections: bool = False,
+    run_matrix: bool = True,
 ):
     """Run fold-local V5 selection, ML, ensemble, matrix, cost, and capacity tests."""
     c = cfg(base, override)
@@ -1386,24 +1389,43 @@ def alpha_v5_backtest(
         ).build(path)
     factor_columns = [f"{factor}_processed" for factor in ALPHA_FACTORS if f"{factor}_processed" in panel]
     settings = V5WalkForwardSettings(model=model, seed=int(c["project"].get("seed", 42)))
+    frozen_selections = None
+    if reuse_selections:
+        frozen_path = Path("research/results/walk_forward_v5_selections.parquet")
+        if not frozen_path.exists():
+            print("[red]FAILED[/red] training-only selections are unavailable; run the linear baseline first")
+            raise typer.Exit(code=1)
+        frozen_selections = pd.read_parquet(frozen_path)
+    suffix = "" if model == "linear" else f"_{model}"
     try:
-        walk_forward = V5WalkForwardRunner(settings).run(panel, factor_columns)
-        walk_path = V5WalkForwardRunner(settings).save(walk_forward)
+        walk_forward = V5WalkForwardRunner(settings).run(
+            panel, factor_columns, precomputed_selections=frozen_selections
+        )
+        walk_path = V5WalkForwardRunner(settings).save(
+            walk_forward, f"research/results/walk_forward_v5{suffix}.parquet"
+        )
         # Persist all OOS audit inputs before the expensive portfolio matrix so
         # an interrupted matrix run never discards completed chronological work.
-        walk_forward.scores.to_parquet("research/results/walk_forward_v5_scores.parquet", index=False)
-        walk_forward.selections.to_parquet("research/results/walk_forward_v5_selections.parquet", index=False)
-        walk_forward.feature_importance.to_parquet("research/results/walk_forward_v5_importance.parquet", index=False)
-        walk_forward.holdings.to_parquet("research/results/walk_forward_v5_holdings.parquet", index=False)
-        matrix = run_experiment_matrix(V5PortfolioEvaluator(), walk_forward.scores, horizon=settings.horizon)
-        matrix.to_parquet("research/results/v5_portfolio_matrix.parquet", index=False)
-        costs = transaction_cost_stress(V5PortfolioEvaluator(), walk_forward.scores, horizon=settings.horizon)
-        costs.to_parquet("research/results/v5_cost_stress.parquet", index=False)
-        capacity = capacity_diagnostics(walk_forward.holdings)
-        capacity.to_parquet("research/results/v5_capacity.parquet", index=False)
+        walk_forward.scores.to_parquet(f"research/results/walk_forward_v5{suffix}_scores.parquet", index=False)
+        walk_forward.selections.to_parquet(f"research/results/walk_forward_v5{suffix}_selections.parquet", index=False)
+        walk_forward.feature_importance.to_parquet(f"research/results/walk_forward_v5{suffix}_importance.parquet", index=False)
+        walk_forward.holdings.to_parquet(f"research/results/walk_forward_v5{suffix}_holdings.parquet", index=False)
+        if run_matrix:
+            matrix = run_experiment_matrix(V5PortfolioEvaluator(), walk_forward.scores, horizon=settings.horizon)
+            matrix.to_parquet(f"research/results/v5_portfolio_matrix{suffix}.parquet", index=False)
+            costs = transaction_cost_stress(V5PortfolioEvaluator(), walk_forward.scores, horizon=settings.horizon)
+            costs.to_parquet(f"research/results/v5_cost_stress{suffix}.parquet", index=False)
+            capacity = capacity_diagnostics(walk_forward.holdings)
+            capacity.to_parquet(f"research/results/v5_capacity{suffix}.parquet", index=False)
     except (RuntimeError, ValueError) as exc:
         print(f"[red]FAILED[/red] {exc}")
         raise typer.Exit(code=1) from exc
+    _write_v5_model_comparison()
+    if not run_matrix:
+        print("[bold]V5 model-only walk-forward[/bold]")
+        print(walk_forward.folds.to_string(index=False))
+        print(f"Walk-forward results: {walk_path}")
+        return
     factor_summary = pd.read_parquet("research/results/factor_v5_results.parquet") if Path("research/results/factor_v5_results.parquet").exists() else pd.DataFrame()
     yearly = pd.read_parquet("research/results/factor_v5_yearly.parquet") if Path("research/results/factor_v5_yearly.parquet").exists() else pd.DataFrame()
     regimes = pd.read_parquet("research/results/factor_v5_regimes.parquet") if Path("research/results/factor_v5_regimes.parquet").exists() else pd.DataFrame()
@@ -1431,6 +1453,36 @@ def alpha_v5_backtest(
     print(f"Failure analysis: {failure_path}")
     print(f"Master report: {report}")
     print(f"Experiment metadata: {metadata}")
+
+
+@app.command("alpha-v5-report")
+def alpha_v5_report(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    panel_path: str = "data/features/v5_alpha_panel.parquet",
+):
+    """Render the V5 master report from retained, non-cherry-picked artifacts."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    required = {
+        "walk-forward": Path("research/results/walk_forward_v5.parquet"),
+        "portfolio matrix": Path("research/results/v5_portfolio_matrix.parquet"),
+        "cost stress": Path("research/results/v5_cost_stress.parquet"),
+        "capacity": Path("research/results/v5_capacity.parquet"),
+        "failure analysis": Path("research/results/alpha_failure_v5.parquet"),
+    }
+    missing = [name for name, path in required.items() if not path.exists()]
+    if missing:
+        print(f"[red]FAILED[/red] missing V5 artifacts: {', '.join(missing)}")
+        raise typer.Exit(code=1)
+    panel = pd.read_parquet(panel_path)
+    walk_forward = SimpleNamespace(folds=pd.read_parquet(required["walk-forward"]))
+    report = _write_v5_master_report(
+        root, panel, walk_forward, pd.read_parquet(required["portfolio matrix"]),
+        pd.read_parquet(required["cost stress"]), pd.read_parquet(required["capacity"]),
+        pd.read_parquet(required["failure analysis"]),
+    )
+    print(f"Master report: {report}")
 
 
 @app.command("alpha-failure-analysis")
@@ -1475,6 +1527,35 @@ def _v5_data_coverage(panel: pd.DataFrame) -> dict[str, object]:
     }
 
 
+def _write_v5_model_comparison() -> Path:
+    """Aggregate every retained chronological model run; never select one by result."""
+    paths = (
+        Path("research/results/walk_forward_v5.parquet"),
+        Path("research/results/walk_forward_v5_random_forest.parquet"),
+        Path("research/results/walk_forward_v5_lightgbm.parquet"),
+    )
+    metrics = ("return", "benchmark_return", "alpha", "sharpe", "drawdown", "turnover", "prediction_IC", "prediction_Rank_IC")
+    rows: list[dict[str, object]] = []
+    for path in paths:
+        if not path.exists():
+            continue
+        folds = pd.read_parquet(path)
+        if folds.empty:
+            continue
+        model = str(folds["model"].iloc[0])
+        row: dict[str, object] = {
+            "model": model,
+            "folds": len(folds),
+            "positive_return_folds": int((pd.to_numeric(folds["return"], errors="coerce") > 0).sum()),
+        }
+        for metric in metrics:
+            row[f"mean_{metric}"] = float(pd.to_numeric(folds[metric], errors="coerce").mean())
+        rows.append(row)
+    output = Path("research/results/v5_ml_model_comparison.parquet")
+    pd.DataFrame(rows).sort_values("model").to_parquet(output, index=False)
+    return output
+
+
 def _write_v5_master_report(
     root: Path,
     panel: pd.DataFrame,
@@ -1487,7 +1568,16 @@ def _write_v5_master_report(
     baseline_path = Path("research/results/v4_baseline.json")
     baseline = json.loads(baseline_path.read_text(encoding="utf-8")) if baseline_path.exists() else {}
     baseline_metrics = pd.DataFrame([baseline.get("metrics", {})])
-    v5_metrics = walk_forward.folds.loc[:, ["return", "sharpe", "drawdown", "alpha", "turnover", "information_ratio"]].mean().to_frame("v5_fold_mean").reset_index(names="metric") if not walk_forward.folds.empty else pd.DataFrame()
+    v5_default = costs.loc[costs["transaction_cost_multiplier"] == 1.0].head(1) if not costs.empty else pd.DataFrame()
+    comparison_names = ("annual_return", "sharpe", "max_drawdown", "alpha", "beta", "turnover", "information_ratio")
+    v5_vs_v4 = pd.DataFrame(
+        {
+            "metric": comparison_names,
+            "v4_baseline": [baseline.get("metrics", {}).get(metric) for metric in comparison_names],
+            "v5_combined_oos": [v5_default.iloc[0].get(metric) if not v5_default.empty else np.nan for metric in comparison_names],
+        }
+    )
+    v5_fold_metrics = walk_forward.folds.loc[:, ["return", "sharpe", "drawdown", "alpha", "turnover", "information_ratio"]].mean().to_frame("v5_fold_mean").reset_index(names="metric") if not walk_forward.folds.empty else pd.DataFrame()
     coverage = pd.DataFrame([_v5_data_coverage(panel)])
     audit = ValidationCoverageAuditor(raw_dir=root / "raw", features_dir=root / "features", benchmark_path=root / "raw" / "000300.parquet").audit().summary()
     factor_summary = pd.read_parquet("research/results/factor_v5_results.parquet") if Path("research/results/factor_v5_results.parquet").exists() else pd.DataFrame()
@@ -1496,6 +1586,8 @@ def _write_v5_master_report(
     breadth = panel.loc[:, [column for column in breadth_columns if column in panel]].drop_duplicates("date").tail(252)
     fundamentals = pd.DataFrame([{"available_rows": int(panel["fundamental_announcement_date"].notna().sum()) if "fundamental_announcement_date" in panel else 0, "status": "available" if "fundamental_announcement_date" in panel and panel["fundamental_announcement_date"].notna().any() else "unavailable; no data fabricated"}])
     ensemble = walk_forward.folds.loc[:, ["fold", "model", "ensemble_weights", "prediction_IC", "prediction_Rank_IC"]] if not walk_forward.folds.empty else pd.DataFrame()
+    comparison_path = Path("research/results/v5_ml_model_comparison.parquet")
+    model_comparison = pd.read_parquet(comparison_path) if comparison_path.exists() else pd.DataFrame()
     benchmarks = BenchmarkCoverageValidator(root / "raw").coverage()
     limitations = pd.DataFrame([
         {"limitation": "fundamentals", "status": fundamentals.loc[0, "status"]},
@@ -1508,11 +1600,12 @@ def _write_v5_master_report(
             ("V4 baseline", baseline_metrics), ("Dataset coverage", coverage), ("Validation coverage audit", audit),
             ("Factor IC ranking", factor_summary), ("Factor redundancy and selection", selection),
             ("Selected alpha set", selection.loc[selection["selected"]] if not selection.empty else selection),
-            ("Fundamentals coverage", fundamentals), ("Market breadth analysis", breadth), ("ML comparison", ensemble),
+            ("Fundamentals coverage", fundamentals), ("Market breadth analysis", breadth), ("ML comparison", model_comparison),
             ("Ensemble results", ensemble), ("Walk-forward results", walk_forward.folds),
             ("Portfolio robustness matrix", matrix), ("Transaction-cost stress", costs),
             ("Benchmark comparison", benchmarks), ("Alpha failure analysis", failure),
-            ("V4 vs V5 OOS summary", v5_metrics), ("Limitations", limitations),
+            ("V4 vs V5 OOS summary", v5_vs_v4), ("V5 fold-average metrics", v5_fold_metrics),
+            ("Limitations", limitations),
         ),
         "reports/v5_alpha_reconstruction.html",
     )
