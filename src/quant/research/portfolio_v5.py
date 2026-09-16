@@ -54,13 +54,17 @@ class V5PortfolioEvaluator:
         missing = required.difference(panel.columns)
         if missing:
             raise ValueError(f"portfolio panel missing: {', '.join(sorted(missing))}")
-        frame = panel.copy()
+        # The matrix must not duplicate the complete feature panel for every
+        # scenario.  Portfolio construction only needs these audit columns.
+        optional = {"amount_20", "realized_vol_20"}
+        keep = list(required | (optional & set(panel.columns)))
+        frame = panel.loc[:, keep].copy()
         frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.normalize()
         frame[end_date] = pd.to_datetime(frame[end_date], errors="coerce")
         frame["code"] = frame["code"].astype(str).str.zfill(6)
         valid = frame[end_date].notna()
         assert_label_after_signal(frame.loc[valid, "date"], frame.loc[valid, end_date])
-        date_groups = {date: values.copy() for date, values in frame.loc[valid].groupby("date", sort=True)}
+        date_groups = {date: values for date, values in frame.loc[valid].groupby("date", sort=True)}
         return self._evaluate_groups(
             date_groups, score_column=score_column, horizon=horizon, top_n=top_n,
             rebalance_frequency=rebalance_frequency, weighting=weighting, industry_limit=industry_limit,
@@ -165,11 +169,21 @@ def run_experiment_matrix(
 ) -> pd.DataFrame:
     """Store all requested portfolio configurations, including weak candidates."""
     label_end = f"label_end_date_{horizon}d"
-    prepared = panel.copy()
+    label = f"future_return_{horizon}d"
+    benchmark_label = f"benchmark_future_return_{horizon}d"
+    required = {
+        "date", "code", "industry", score_column, label, benchmark_label, label_end,
+        "market_regime", "volatility_regime",
+    }
+    optional = {"amount_20", "realized_vol_20"}
+    missing = required.difference(panel.columns)
+    if missing:
+        raise ValueError(f"portfolio matrix panel missing: {', '.join(sorted(missing))}")
+    prepared = panel.loc[:, list(required | (optional & set(panel.columns)))].copy()
     prepared["date"] = pd.to_datetime(prepared["date"], errors="raise").dt.normalize()
     prepared[label_end] = pd.to_datetime(prepared[label_end], errors="coerce")
     date_groups = {
-        date: values.copy() for date, values in prepared.loc[prepared[label_end].notna()].groupby("date", sort=True)
+        date: values for date, values in prepared.loc[prepared[label_end].notna()].groupby("date", sort=True)
     }
     records: list[dict[str, object]] = []
     for top_n in (10, 20, 30, 50):

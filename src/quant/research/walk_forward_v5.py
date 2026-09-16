@@ -87,7 +87,6 @@ class V5WalkForwardRunner:
             ensemble = AlphaEnsemble("validation_weighted")
             ensemble_weights = ensemble.fit(validation, ["factor_composite", "ml_prediction"], label)
             test["ensemble_score"] = ensemble.predict(test)
-            scored_tests.append(test)
             validation_prediction = prediction_ic_metrics(validation, validation["ml_prediction"], label)
             test_prediction = prediction_ic_metrics(test, test["ml_prediction"], label)
             portfolio = V5PortfolioEvaluator().evaluate(
@@ -106,6 +105,17 @@ class V5WalkForwardRunner:
             importance = model.feature_importance()
             importance["fold"] = fold_number
             importances.append(importance)
+            # Retain the audit fields needed to reproduce portfolio experiments
+            # without keeping every raw and factor column from each test fold.
+            # This sharply reduces the working set for the 1,728-trial matrix.
+            score_columns = [
+                "date", "code", "industry", "sector", "market_regime", "volatility_regime",
+                "factor_composite", "ml_prediction", "ensemble_score", label, label_end,
+                f"future_return_{self.settings.horizon}d",
+                f"benchmark_future_return_{self.settings.horizon}d",
+                "amount_20", "realized_vol_20",
+            ]
+            scored_tests.append(test.loc[:, [column for column in score_columns if column in test]].copy())
             benchmark_return = _benchmark_return(portfolio.results, self.settings.rebalance_frequency)
             folds.append(
                 {

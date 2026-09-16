@@ -1389,6 +1389,12 @@ def alpha_v5_backtest(
     try:
         walk_forward = V5WalkForwardRunner(settings).run(panel, factor_columns)
         walk_path = V5WalkForwardRunner(settings).save(walk_forward)
+        # Persist all OOS audit inputs before the expensive portfolio matrix so
+        # an interrupted matrix run never discards completed chronological work.
+        walk_forward.scores.to_parquet("research/results/walk_forward_v5_scores.parquet", index=False)
+        walk_forward.selections.to_parquet("research/results/walk_forward_v5_selections.parquet", index=False)
+        walk_forward.feature_importance.to_parquet("research/results/walk_forward_v5_importance.parquet", index=False)
+        walk_forward.holdings.to_parquet("research/results/walk_forward_v5_holdings.parquet", index=False)
         matrix = run_experiment_matrix(V5PortfolioEvaluator(), walk_forward.scores, horizon=settings.horizon)
         matrix.to_parquet("research/results/v5_portfolio_matrix.parquet", index=False)
         costs = transaction_cost_stress(V5PortfolioEvaluator(), walk_forward.scores, horizon=settings.horizon)
