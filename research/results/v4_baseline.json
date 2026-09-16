@@ -1,0 +1,19 @@
+{
+  "baseline_version": "v4.0.1",
+  "source": "data/validation/walk_forward_results.parquet",
+  "date_range": {
+    "start": "2026-06-17",
+    "end": "2026-09-10"
+  },
+  "metrics": {
+    "annual_return": -0.47449975138423817,
+    "sharpe": -3.385156764882846,
+    "max_drawdown": -0.10885608663429835,
+    "alpha": -0.34546259411164804,
+    "beta": 0.6146521774798415,
+    "turnover": 2.239934333958724,
+    "information_ratio": -1.1654674910280003,
+    "walk_forward_period_count": 3,
+    "rebalance_count": 5
+  }
+}

@@ -15,6 +15,7 @@ from .config import load_config
 from .data.components.akshare_provider import AKShareComponentProvider
 from .data.components.provider import LocalFirstComponentProvider
 from .data.downloader import DataDownloader
+from .data.fundamental import FundamentalStore, LocalFundamentalProvider
 from .data.industry import AKShareIndustryProvider, load_industry_metadata
 from .data.providers.tencent_index import TencentIndexProvider
 from .data.storage import Storage
@@ -64,7 +65,13 @@ from .research import (
     TradeAttributionEngine,
 )
 from .training import train_model
-from .validation import RobustnessTester, WalkForwardSettings, WalkForwardSimulator
+from .validation import (
+    RobustnessTester,
+    ValidationCoverageAuditor,
+    WalkForwardSettings,
+    WalkForwardSimulator,
+    capture_v4_baseline,
+)
 
 app=typer.Typer(help="Personal A-share Quant Lab")
 
@@ -488,6 +495,59 @@ def research_check(
     print(f"Missing ratio: {summary['missing_ratio']:.2%}")
     status = "READY" if summary["research_ready"] else "NOT READY"
     print(f"Research-ready: {status}")
+
+
+@app.command("validation-audit")
+def validation_audit(
+    base: str = "configs/base.yaml",
+    override: str | None = None,
+    scores_path: str = "data/features/composite_score.parquet",
+):
+    """Explain V4 walk-forward coverage before changing any validation setting."""
+    c = cfg(base, override)
+    root = Path(c["data"]["storage_root"])
+    auditor = ValidationCoverageAuditor(
+        raw_dir=root / "raw",
+        features_dir=root / "features",
+        scores_path=scores_path,
+        benchmark_path=root / "raw" / "000300.parquet",
+    )
+    try:
+        result = auditor.audit()
+        report = auditor.write_report(result)
+        baseline = capture_v4_baseline(root / "validation" / "walk_forward_results.parquet")
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"[red]FAILED[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    print("[bold]Validation coverage audit[/bold]")
+    print(result.summary().to_string(index=False))
+    print(result.rows_removed.to_string(index=False))
+    print(f"Bottleneck: {result.bottleneck}")
+    print(f"Coverage report: {report}")
+    print(f"Frozen V4 baseline: {baseline}")
+
+
+@app.command("fundamental-update")
+def fundamental_update(
+    source: str = "data/fundamental/fundamentals.parquet",
+    output: str = "data/fundamental/fundamentals.parquet",
+):
+    """Validate local point-in-time fundamentals; no synthetic fallback is used."""
+    provider = LocalFundamentalProvider(source)
+    store = FundamentalStore(output)
+    try:
+        records = store.update(provider)
+    except ValueError as exc:
+        print(f"[red]FAILED[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    if records.empty:
+        print("[yellow]UNAVAILABLE[/yellow] No local fundamental disclosures were found; no data were fabricated.")
+        print("Continue V5 price and market-alpha research, or supply a valid local disclosure file.")
+        return
+    print(
+        f"[green]SAVED[/green] {output}: {len(records):,} disclosures, "
+        f"{records['code'].nunique():,} securities"
+    )
 
 
 @app.command("factor-build")

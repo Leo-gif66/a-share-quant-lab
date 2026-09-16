@@ -26,6 +26,7 @@ data/components/
 data/memory/
 data/paper/
 data/validation/
+data/fundamental/
 
 # Generated experiment, model, and reporting artifacts
 artifacts/
@@ -34,7 +35,9 @@ mlruns/
 models/*.joblib
 models/*.json
 models/*.csv
-research/results/
+research/results/*
+!research/results/v4_baseline.json
+research/experiments/*.json
 reports/
 
 # Local databases and logs

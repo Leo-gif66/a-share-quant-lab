@@ -15,7 +15,14 @@ from .data import FactorResearchDataBuilder
 from .decision_explanation import DecisionExplanationEngine
 from .error_analysis import ErrorAnalysisResult, PredictionErrorAnalyzer
 from .evolution import EvolutionResult, StrategyEvolutionEngine
+from .experiments import ExperimentMetadata, ExperimentRegistry
 from .factor_evaluation import FactorEvaluator, factor_contribution_analysis
+from .leakage import (
+    assert_feature_available,
+    assert_fundamental_available,
+    assert_label_after_signal,
+    assert_training_before_test,
+)
 from .live_simulation import LiveSimulationEngine, LiveSimulationResult
 from .optimization import ParameterOptimizer, factor_weight_candidates
 from .performance_attribution import PerformanceAttributionEngine, PerformanceAttributionResult
@@ -34,6 +41,8 @@ __all__ = [
     "DecisionExplanationEngine",
     "ErrorAnalysisResult",
     "EvolutionResult",
+    "ExperimentMetadata",
+    "ExperimentRegistry",
     "FactorCombinationResearch",
     "FactorEvaluator",
     "FactorNeutralizer",
@@ -56,6 +65,10 @@ __all__ = [
     "WalkForwardConfig",
     "WalkForwardPeriod",
     "WalkForwardValidator",
+    "assert_feature_available",
+    "assert_fundamental_available",
+    "assert_label_after_signal",
+    "assert_training_before_test",
     "factor_contribution_analysis",
     "factor_weight_candidates",
 ]
