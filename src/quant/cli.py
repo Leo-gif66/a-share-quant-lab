@@ -1422,9 +1422,20 @@ def alpha_v5_backtest(
         raise typer.Exit(code=1) from exc
     _write_v5_model_comparison()
     if not run_matrix:
+        metadata = ExperimentRegistry().record(
+            _v5_experiment_id("walk-forward"),
+            data_coverage=_v5_data_coverage(panel),
+            universe={"configured_stocks": len(Universe(c["data"].get("universe_path", "configs/universe_large.yaml")).stocks())},
+            factor_set=factor_columns,
+            model=model,
+            parameters={**asdict(settings), "reuse_training_only_selections": reuse_selections},
+            result_metrics={key: float(walk_forward.folds[key].mean()) for key in ("return", "sharpe", "drawdown", "alpha", "turnover", "prediction_IC", "prediction_Rank_IC")},
+            notes="Model-only comparison using selections frozen from each fold's prior training period; no portfolio matrix retuning.",
+        )
         print("[bold]V5 model-only walk-forward[/bold]")
         print(walk_forward.folds.to_string(index=False))
         print(f"Walk-forward results: {walk_path}")
+        print(f"Experiment metadata: {metadata}")
         return
     factor_summary = pd.read_parquet("research/results/factor_v5_results.parquet") if Path("research/results/factor_v5_results.parquet").exists() else pd.DataFrame()
     yearly = pd.read_parquet("research/results/factor_v5_yearly.parquet") if Path("research/results/factor_v5_yearly.parquet").exists() else pd.DataFrame()
