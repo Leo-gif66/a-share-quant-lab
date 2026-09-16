@@ -85,6 +85,7 @@ class V5PortfolioEvaluator:
         max_stock_weight: float,
         risk_overlay: str,
         transaction_cost_multiplier: float,
+        include_holdings: bool = True,
     ) -> V5PortfolioResult:
         label, end_date = f"future_return_{horizon}d", f"label_end_date_{horizon}d"
         benchmark_label = f"benchmark_future_return_{horizon}d"
@@ -119,8 +120,9 @@ class V5PortfolioEvaluator:
                     "volatility_regime": str(selected["volatility_regime"].iloc[0]),
                 }
             )
-            for row, weight in zip(selected.itertuples(index=False), weights, strict=False):
-                holdings.append({"date": date, "code": row.code, "industry": row.industry, "weight": float(weight), "score": float(getattr(row, score_column)), "amount_20": float(getattr(row, "amount_20", np.nan))})
+            if include_holdings:
+                for row, weight in zip(selected.itertuples(index=False), weights, strict=False):
+                    holdings.append({"date": date, "code": row.code, "industry": row.industry, "weight": float(weight), "score": float(getattr(row, score_column)), "amount_20": float(getattr(row, "amount_20", np.nan))})
             previous = target
         results = pd.DataFrame(records)
         return V5PortfolioResult(_metrics(results, rebalance_frequency), results, pd.DataFrame(holdings))
@@ -196,6 +198,7 @@ def run_experiment_matrix(
                                 date_groups, score_column=score_column, horizon=horizon, top_n=top_n,
                                 rebalance_frequency=rebalance, weighting=weighting, industry_limit=industry_limit,
                                 max_stock_weight=max_weight, risk_overlay=overlay,
+                                include_holdings=False,
                             )
                             records.append({
                                 "top_n": top_n, "rebalance_frequency": rebalance, "weighting": weighting,
